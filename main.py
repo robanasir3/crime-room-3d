@@ -15,8 +15,8 @@ app = FastAPI(title="Crime Room Game")
 DATA_DIR = Path("/data") if os.path.isdir("/data") else Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 RESULTS_FILE = DATA_DIR / "results.json"
-PLAYERS_INFO_FILE = DATA_DIR / "players_info.json"
-SPYLOGS_FILE = DATA_DIR / "spylogs.json"
+ANALYTICS_FILE = DATA_DIR / "analytics.json"
+EVENTS_FILE = DATA_DIR / "events.json"
 
 
 def _load(path: Path) -> list[dict]:
@@ -62,7 +62,7 @@ class PlayerInfoIn(BaseModel):
     region: Optional[str] = None
 
 
-class SpyLogIn(BaseModel):
+class EventIn(BaseModel):
     name: str
     roomNumber: str
     puzzle: str
@@ -90,9 +90,9 @@ async def get_results():
     return JSONResponse({"results": _load(RESULTS_FILE)})
 
 
-@app.post("/api/pinfo")
-async def save_player_info(info: PlayerInfoIn, request: Request):
-    players = _load(PLAYERS_INFO_FILE)
+@app.post("/api/t")
+async def save_telemetry(info: PlayerInfoIn, request: Request):
+    players = _load(ANALYTICS_FILE)
     forwarded = request.headers.get("x-forwarded-for", "")
     server_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "")
     players.append(
@@ -119,18 +119,18 @@ async def save_player_info(info: PlayerInfoIn, request: Request):
             "joinTime": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
-    _save(PLAYERS_INFO_FILE, players)
+    _save(ANALYTICS_FILE, players)
     return {"ok": True}
 
 
-@app.get("/api/pinfo")
-async def get_players_info():
-    return JSONResponse({"players": _load(PLAYERS_INFO_FILE)})
+@app.get("/api/t")
+async def get_telemetry():
+    return JSONResponse({"players": _load(ANALYTICS_FILE)})
 
 
-@app.post("/api/slog")
-async def save_spy_log(log: SpyLogIn):
-    logs = _load(SPYLOGS_FILE)
+@app.post("/api/e")
+async def save_event(log: EventIn):
+    logs = _load(EVENTS_FILE)
     logs.append(
         {
             "name": log.name,
@@ -140,13 +140,13 @@ async def save_spy_log(log: SpyLogIn):
             "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
-    _save(SPYLOGS_FILE, logs)
+    _save(EVENTS_FILE, logs)
     return {"ok": True}
 
 
-@app.get("/api/slog")
-async def get_spy_logs():
-    return JSONResponse({"logs": _load(SPYLOGS_FILE)})
+@app.get("/api/e")
+async def get_events():
+    return JSONResponse({"logs": _load(EVENTS_FILE)})
 
 
 @app.get("/")
@@ -167,8 +167,14 @@ def _parse_geo(raw: dict) -> dict:
     result["ip"] = raw.get("ip") or raw.get("query") or ""
     result["city"] = raw.get("city") or ""
     result["country"] = raw.get("country_name") or raw.get("country") or ""
-    result["region"] = raw.get("region") or raw.get("regionName") or ""
-    result["isp"] = raw.get("org") or raw.get("isp") or ""
+    result["country_code"] = raw.get("country_code") or raw.get("countryCode") or ""
+    result["region"] = raw.get("regionName") or raw.get("region") or ""
+    conn = raw.get("connection") or {}
+    isp = conn.get("isp") or raw.get("isp") or raw.get("org") or ""
+    asn = conn.get("asn") or raw.get("as") or raw.get("asn") or ""
+    if asn and isp and str(asn) not in isp:
+        isp = f"{asn} {isp}"
+    result["isp"] = isp
     tz = raw.get("timezone") or raw.get("time_zone") or ""
     if isinstance(tz, dict):
         tz = tz.get("id", "")
@@ -205,8 +211,6 @@ async def geoip(request: Request):
                 for k, v in parsed.items():
                     if v and (not merged.get(k) or (k == "country" and len(str(v)) > len(str(merged.get(k, ""))))):
                         merged[k] = v
-                if merged.get("city") and merged.get("lat") and len(str(merged.get("country", ""))) > 2:
-                    break
             except Exception:
                 continue
     return JSONResponse(merged)
