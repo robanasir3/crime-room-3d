@@ -974,8 +974,8 @@ function animate() {
         direction.set(0, 0, 0);
 
         if (isMobile && joystickData.active) {
-            direction.z = -joystickData.dy;
-            direction.x = -joystickData.dx;
+            direction.z = joystickData.dy;
+            direction.x = joystickData.dx;
         } else {
             if (moveForward) direction.z = -1;
             if (moveBackward) direction.z = 1;
