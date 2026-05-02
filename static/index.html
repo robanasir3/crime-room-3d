@@ -27,13 +27,14 @@
         <span id="timerText">00:00</span>
     </div>
 
-    <!-- INVENTORY HUD -->
-    <div id="inventoryBar" class="inventory-bar hidden">
-        <div class="inv-title">المخزن</div>
-        <div id="inventorySlots" class="inv-slots"></div>
+    <!-- HELD ITEMS HUD (replaces inventory bar) -->
+    <div id="heldItemsHUD" class="held-items-hud hidden">
+        <div class="held-items-label">في اليد</div>
+        <div id="heldItemsList" class="held-items-list"></div>
+        <div class="held-items-hint">سكرول لتبديل</div>
     </div>
 
-    <!-- LOCK SCREEN PANEL (6 digit slots) -->
+    <!-- LOCK SCREEN PANEL -->
     <div id="lockScreenHUD" class="lock-screen-hud hidden">
         <div class="lock-label">شاشة القفل</div>
         <div id="lockDigits" class="lock-digits">
@@ -81,33 +82,29 @@
         </div>
     </div>
 
-    <!-- PHONE CAMERA OVERLAY (Puzzle 2) -->
-    <div id="phoneCameraOverlay" class="overlay hidden">
-        <div class="phone-camera-view">
-            <div class="phone-frame">
-                <div class="phone-screen">
-                    <canvas id="phoneCameraCanvas" width="512" height="384"></canvas>
-                    <div class="phone-hud">
-                        <span class="uv-badge">UV FILTER</span>
-                    </div>
-                </div>
-            </div>
-            <button class="close-phone-btn" onclick="closePhoneCamera()">✕</button>
-        </div>
-    </div>
-
-    <!-- RADIO OVERLAY (Puzzle 6) -->
+    <!-- RADIO OVERLAY (Puzzle 6 – Two Dials) -->
     <div id="radioOverlay" class="overlay hidden">
         <div class="overlay-content radio-panel">
             <button class="close-btn" onclick="closeOverlay('radioOverlay')">✕</button>
             <h2>📻 الراديو</h2>
             <div class="radio-body">
-                <div class="radio-display" id="radioDisplay">FM 88.0</div>
-                <div class="radio-dial">
-                    <input type="range" id="radioSlider" min="880" max="1080" value="880" step="1"
-                           oninput="onRadioTune(this.value)">
-                    <div class="dial-labels">
-                        <span>88</span><span>92</span><span>96</span><span>100</span><span>104</span><span>108</span>
+                <div class="radio-display" id="radioDisplay">FM --.-</div>
+                <div class="radio-dials-container">
+                    <div class="radio-dial-group">
+                        <label>الدائرة A</label>
+                        <div class="dial-wrapper">
+                            <input type="range" id="radioDialA" class="radio-dial-knob" min="0" max="100" value="50"
+                                   oninput="updateRadioDisplay()">
+                            <div class="dial-indicator" id="dialIndicatorA"></div>
+                        </div>
+                    </div>
+                    <div class="radio-dial-group">
+                        <label>الدائرة B</label>
+                        <div class="dial-wrapper">
+                            <input type="range" id="radioDialB" class="radio-dial-knob" min="0" max="100" value="50"
+                                   oninput="updateRadioDisplay()">
+                            <div class="dial-indicator" id="dialIndicatorB"></div>
+                        </div>
                     </div>
                 </div>
                 <div id="radioMessage" class="radio-msg"></div>
@@ -115,7 +112,7 @@
         </div>
     </div>
 
-    <!-- LOCK SCREEN INTERACT OVERLAY (door panel) -->
+    <!-- LOCK SCREEN INTERACT OVERLAY -->
     <div id="doorLockOverlay" class="overlay hidden">
         <div class="overlay-content door-lock-panel">
             <button class="close-btn" onclick="closeOverlay('doorLockOverlay')">✕</button>

@@ -1,14 +1,16 @@
 // =====================================================================
-//  ESCAPE ROOM 3D – Complete Game
+//  ESCAPE ROOM 3D – Complete Game (v2 – Gameplay Overhaul)
 // =====================================================================
 
 // ============= CONSTANTS =============
 const ADMIN_NAME = 'admin-louai';
-const PUZZLE_DIGITS = ['7', '3', '9', '1', '4', '8'];
+const PUZZLE_DIGITS = ['7', '3', '7', '1', '4', '8'];
 const ROOM_W = 10, ROOM_H = 3.5, ROOM_D = 8;
 const PLAYER_HEIGHT = 1.6;
 const MOVE_SPEED = 7.0;
-const RADIO_TARGET = 1045; // FM 104.5
+const RADIO_TARGET_A = 52;  // dial A target (0-100)
+const RADIO_TARGET_B = 73;  // dial B target (0-100)
+const RADIO_TOLERANCE = 5;
 
 // ============= GAME STATE =============
 const state = {
@@ -21,12 +23,14 @@ const state = {
     lockDigits: ['_', '_', '_', '_', '_', '_'],
     mirrorsPlaced: [false, false, false],
     mirrorsFound: [false, false, false],
-    inventory: [],
-    selectedItem: null,
-    lightBeamActive: true,
-    diamondHit: false,
+    // Held items system (replaces inventory)
+    heldItems: [],          // items collected by player
+    activeItemIndex: -1,    // which item is currently shown in hand
     // Puzzle states
     paperBurned: false,
+    paperPickedUp: false,
+    lighterPickedUp: false,
+    burningInProgress: false,
     phonePickedUp: false,
     filterPickedUp: false,
     filterApplied: false,
@@ -36,6 +40,8 @@ const state = {
     sculptureOnX: false,
     lampOn: false,
     radioFound: false,
+    lightBeamActive: true,
+    diamondHit: false,
 };
 
 // ============= THREE.JS GLOBALS =============
@@ -66,6 +72,18 @@ let beamSegments = [];
 // Audio context for sounds
 let audioCtx;
 
+// First-person held item system
+let heldItemGroup;       // Group attached to camera for held items
+let heldItemMesh = null; // Current mesh displayed in hand
+let handMesh = null;     // The hand/arm mesh
+
+// Phone camera system (in-hand)
+let phoneCameraRT, phoneCameraObj, uvNumberMesh;
+let phoneInHandActive = false;
+
+// Painting textures
+let paintingNormalTex, paintingRedTex;
+
 // ============= START GAME =============
 function startGame() {
     const name = document.getElementById('playerName').value.trim();
@@ -90,7 +108,7 @@ function startGame() {
     state.timerStart = Date.now();
     state.timerInterval = setInterval(updateTimer, 100);
     document.getElementById('timerDisplay').classList.remove('hidden');
-    document.getElementById('inventoryBar').classList.remove('hidden');
+    document.getElementById('heldItemsHUD').classList.remove('hidden');
     document.getElementById('lockScreenHUD').classList.remove('hidden');
     document.getElementById('crosshair').classList.remove('hidden');
 
@@ -98,7 +116,7 @@ function startGame() {
         document.getElementById('mobileControls').classList.remove('hidden');
     }
 
-    updateInventoryUI();
+    updateHeldItemsUI();
     updateLockUI();
 }
 
@@ -207,16 +225,278 @@ function init3D() {
     gltfLoader = new THREE.GLTFLoader();
     texLoader = new THREE.TextureLoader();
 
+    // Preload painting textures
+    paintingNormalTex = texLoader.load('/static/painting_normal.jpg');
+    paintingRedTex = texLoader.load('/static/painting_red.jpg');
+    paintingNormalTex.encoding = THREE.sRGBEncoding;
+    paintingRedTex.encoding = THREE.sRGBEncoding;
+
     buildRoom();
     buildFurniture();
     buildPuzzleObjects();
     buildRedHerrings();
     setupLights();
     setupControls();
+    setupHeldItemSystem();
     setupPhoneCamera();
 
     window.addEventListener('resize', onResize);
     animate();
+}
+
+// ============= FIRST-PERSON HELD ITEM SYSTEM =============
+function setupHeldItemSystem() {
+    heldItemGroup = new THREE.Group();
+    heldItemGroup.renderOrder = 999;
+    camera.add(heldItemGroup);
+    scene.add(camera);
+
+    // Create a simple hand/arm mesh
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a574, roughness: 0.6, metalness: 0.05 });
+    // Forearm
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.06), skinMat);
+    arm.position.set(0.35, -0.45, -0.4);
+    arm.rotation.x = -0.3;
+    arm.rotation.z = 0.1;
+    heldItemGroup.add(arm);
+    // Hand
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.08), skinMat);
+    hand.position.set(0.35, -0.32, -0.52);
+    hand.rotation.x = -0.5;
+    heldItemGroup.add(hand);
+    handMesh = hand;
+}
+
+function getActiveItem() {
+    if (state.activeItemIndex >= 0 && state.activeItemIndex < state.heldItems.length) {
+        return state.heldItems[state.activeItemIndex];
+    }
+    return null;
+}
+
+function getActiveItemName() {
+    const item = getActiveItem();
+    return item ? item.name : null;
+}
+
+function showItemInHand(itemName) {
+    // Remove previous held item mesh
+    if (heldItemMesh) {
+        heldItemGroup.remove(heldItemMesh);
+        heldItemMesh = null;
+    }
+
+    if (!itemName) return;
+
+    const group = new THREE.Group();
+    group.position.set(0.32, -0.25, -0.55);
+
+    switch (itemName) {
+        case 'ورقة': {
+            const paper = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.12, 0.16),
+                new THREE.MeshStandardMaterial({ color: 0xf5f0e0, roughness: 0.9, side: THREE.DoubleSide })
+            );
+            paper.rotation.x = -0.3;
+            group.add(paper);
+            break;
+        }
+        case 'ولاعة': {
+            const body = new THREE.Mesh(
+                new THREE.BoxGeometry(0.03, 0.06, 0.02),
+                new THREE.MeshStandardMaterial({ color: 0xb8b8b8, metalness: 0.7, roughness: 0.2 })
+            );
+            group.add(body);
+            const top = new THREE.Mesh(
+                new THREE.BoxGeometry(0.03, 0.015, 0.02),
+                new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8 })
+            );
+            top.position.y = 0.038;
+            group.add(top);
+            break;
+        }
+        case 'هاتف': {
+            const phoneBody = new THREE.Mesh(
+                new THREE.BoxGeometry(0.06, 0.005, 0.11),
+                new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.15, metalness: 0.7 })
+            );
+            group.add(phoneBody);
+            // Phone screen - will be updated with camera feed
+            const phoneScreen = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.05, 0.085),
+                new THREE.MeshBasicMaterial({ color: 0x112244 })
+            );
+            phoneScreen.position.y = 0.003;
+            phoneScreen.rotation.x = -Math.PI / 2;
+            phoneScreen.name = 'phoneScreen';
+            group.add(phoneScreen);
+            // Camera lens
+            const lens = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.003, 0.003, 0.003, 8),
+                new THREE.MeshStandardMaterial({ color: 0x222233, metalness: 0.9 })
+            );
+            lens.position.set(-0.015, 0.004, -0.04);
+            lens.rotation.x = Math.PI / 2;
+            group.add(lens);
+            group.position.set(0.25, -0.2, -0.45);
+            group.rotation.x = -0.8;
+            break;
+        }
+        case 'فلتر أحمر': {
+            const filter = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.1, 0.13),
+                new THREE.MeshStandardMaterial({ color: 0xff2222, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+            );
+            filter.rotation.x = -0.3;
+            group.add(filter);
+            break;
+        }
+        case 'كوب': {
+            const cupBody = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.025, 0.02, 0.06, 12),
+                new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 })
+            );
+            group.add(cupBody);
+            const cupHandle = new THREE.Mesh(
+                new THREE.TorusGeometry(0.013, 0.003, 6, 8, Math.PI),
+                new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 })
+            );
+            cupHandle.position.set(0.028, 0, 0);
+            cupHandle.rotation.z = Math.PI / 2;
+            group.add(cupHandle);
+            break;
+        }
+        case 'مجسم': {
+            const mat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.7, roughness: 0.3 });
+            const sBase = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.01, 8), mat);
+            sBase.position.y = -0.02;
+            group.add(sBase);
+            const sV = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.08, 0.012), mat);
+            sV.position.y = 0.02;
+            group.add(sV);
+            const sH = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.012, 0.012), mat);
+            sH.position.set(0.01, 0.05, 0);
+            sH.rotation.z = 0.3;
+            group.add(sH);
+            break;
+        }
+        case 'مرآة': {
+            // Handheld mirror
+            const handle = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.008, 0.01, 0.1, 8),
+                new THREE.MeshStandardMaterial({ color: 0x6b4a30, roughness: 0.5 })
+            );
+            handle.position.y = -0.06;
+            group.add(handle);
+            const frame = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.045, 0.045, 0.008, 16),
+                new THREE.MeshStandardMaterial({ color: 0x8b6914, metalness: 0.5, roughness: 0.3 })
+            );
+            frame.position.y = 0.01;
+            frame.rotation.x = Math.PI / 2;
+            group.add(frame);
+            const glass = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.04, 0.04, 0.005, 16),
+                new THREE.MeshStandardMaterial({ color: 0xccddff, metalness: 1.0, roughness: 0.02, envMapIntensity: 2.0 })
+            );
+            glass.position.y = 0.01;
+            glass.rotation.x = Math.PI / 2;
+            group.add(glass);
+            break;
+        }
+        default: {
+            // Generic item
+            const generic = new THREE.Mesh(
+                new THREE.BoxGeometry(0.04, 0.04, 0.04),
+                new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5 })
+            );
+            group.add(generic);
+            break;
+        }
+    }
+
+    heldItemGroup.add(group);
+    heldItemMesh = group;
+}
+
+function cycleHeldItem(direction) {
+    if (state.heldItems.length === 0) return;
+    state.activeItemIndex = (state.activeItemIndex + direction + state.heldItems.length) % state.heldItems.length;
+    showItemInHand(state.heldItems[state.activeItemIndex].name);
+    updateHeldItemsUI();
+
+    // Handle phone camera when switching items
+    if (state.heldItems[state.activeItemIndex].name === 'هاتف') {
+        phoneInHandActive = true;
+    } else {
+        phoneInHandActive = false;
+    }
+}
+
+// ============= HELD ITEMS MANAGEMENT =============
+function hasItem(name) {
+    return state.heldItems.some(it => it.name === name);
+}
+
+function addHeldItem(name) {
+    if (hasItem(name)) return;
+    state.heldItems.push({ name });
+    state.activeItemIndex = state.heldItems.length - 1;
+    showItemInHand(name);
+    updateHeldItemsUI();
+
+    // Check for auto-burn (lighter + paper)
+    if ((name === 'ولاعة' || name === 'ورقة') && hasItem('ولاعة') && hasItem('ورقة') && !state.paperBurned && !state.burningInProgress) {
+        startBurnAnimation();
+    }
+
+    // Activate phone camera when picking up phone
+    if (name === 'هاتف') {
+        phoneInHandActive = true;
+    }
+}
+
+function removeHeldItem(name) {
+    const idx = state.heldItems.findIndex(it => it.name === name);
+    if (idx === -1) return;
+    state.heldItems.splice(idx, 1);
+    if (state.activeItemIndex >= state.heldItems.length) {
+        state.activeItemIndex = state.heldItems.length - 1;
+    }
+    const active = getActiveItem();
+    showItemInHand(active ? active.name : null);
+    updateHeldItemsUI();
+    if (name === 'هاتف') phoneInHandActive = false;
+}
+
+function pickupItem(mesh, data) {
+    addHeldItem(data.invName);
+    mesh.visible = false;
+    const idx = interactiveObjects.indexOf(mesh);
+    if (idx > -1) interactiveObjects.splice(idx, 1);
+    showNotification(`التقطت: ${data.invName}`);
+}
+
+function updateHeldItemsUI() {
+    const container = document.getElementById('heldItemsList');
+    if (!container) return;
+    container.innerHTML = '';
+    state.heldItems.forEach((item, i) => {
+        const slot = document.createElement('div');
+        slot.className = 'held-item-slot' + (i === state.activeItemIndex ? ' active' : '');
+        slot.textContent = item.name;
+        slot.onclick = () => {
+            state.activeItemIndex = i;
+            showItemInHand(item.name);
+            updateHeldItemsUI();
+            if (item.name === 'هاتف') {
+                phoneInHandActive = true;
+            } else {
+                phoneInHandActive = false;
+            }
+        };
+        container.appendChild(slot);
+    });
 }
 
 // ============= PROCEDURAL TEXTURES =============
@@ -302,7 +582,6 @@ function loadPBRTexture(basePath, repeatX, repeatY) {
     }
     diff.encoding = THREE.sRGBEncoding;
     const props = { map: diff, normalMap: nor, normalScale: new THREE.Vector2(0.8, 0.8) };
-    // Try to load roughness map
     const rough = texLoader.load('/static/textures/' + basePath + '_rough.jpg');
     if (rough) {
         rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
@@ -314,7 +593,6 @@ function loadPBRTexture(basePath, repeatX, repeatY) {
 
 // ============= ROOM GEOMETRY =============
 function buildRoom() {
-    // Load PBR textures from Poly Haven
     const floorProps = loadPBRTexture('floor', 4, 3);
     const wallProps = loadPBRTexture('wall', 3, 1.5);
     const ceilProps = loadPBRTexture('ceil', 3, 2);
@@ -338,13 +616,11 @@ function buildRoom() {
 
     const wallMat = new THREE.MeshStandardMaterial({ ...wallProps, roughness: 0.7, color: 0x999999 });
 
-    // Back wall (has door)
     const backWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_H), wallMat);
     backWall.position.set(0, ROOM_H / 2, -ROOM_D / 2);
     backWall.receiveShadow = true;
     scene.add(backWall);
 
-    // Front wall
     const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_H), wallMat.clone());
     frontWall.position.set(0, ROOM_H / 2, ROOM_D / 2);
     frontWall.rotation.y = Math.PI;
@@ -353,25 +629,21 @@ function buildRoom() {
     frontWall.userData = { type: 'uvWall' };
     interactiveObjects.push(frontWall);
 
-    // Left wall
     const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, ROOM_H), wallMat.clone());
     leftWall.position.set(-ROOM_W / 2, ROOM_H / 2, 0);
     leftWall.rotation.y = Math.PI / 2;
     leftWall.receiveShadow = true;
     scene.add(leftWall);
 
-    // Right wall
     const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, ROOM_H), wallMat.clone());
     rightWall.position.set(ROOM_W / 2, ROOM_H / 2, 0);
     rightWall.rotation.y = -Math.PI / 2;
     rightWall.receiveShadow = true;
     scene.add(rightWall);
 
-    // Door frame on back wall - use wood PBR texture
     const doorWoodProps = loadPBRTexture('wood', 1, 2);
     const doorFrameMat = new THREE.MeshStandardMaterial({ ...doorWoodProps, roughness: 0.4, metalness: 0.1, color: 0x664422 });
     const doorW = 1.0, doorH = 2.2;
-    // Door
     doorMesh = new THREE.Mesh(
         new THREE.BoxGeometry(doorW, doorH, 0.08),
         new THREE.MeshStandardMaterial({ ...doorWoodProps, roughness: 0.35, metalness: 0.05, color: 0x553318 })
@@ -380,7 +652,6 @@ function buildRoom() {
     doorMesh.castShadow = true;
     scene.add(doorMesh);
 
-    // Door frame
     const df1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, doorH + 0.1, 0.12), doorFrameMat);
     df1.position.set(2 - doorW / 2 - 0.04, doorH / 2, -ROOM_D / 2 + 0.05);
     scene.add(df1);
@@ -391,7 +662,6 @@ function buildRoom() {
     df3.position.set(2, doorH + 0.04, -ROOM_D / 2 + 0.05);
     scene.add(df3);
 
-    // Lock screen panel next to door
     lockScreenMesh = new THREE.Mesh(
         new THREE.BoxGeometry(0.4, 0.3, 0.05),
         new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x000000, roughness: 0.3, metalness: 0.5 })
@@ -402,7 +672,6 @@ function buildRoom() {
     scene.add(lockScreenMesh);
     interactiveObjects.push(lockScreenMesh);
 
-    // Diamond above door
     const diamondGeo = new THREE.OctahedronGeometry(0.15, 0);
     diamondMesh = new THREE.Mesh(diamondGeo, new THREE.MeshStandardMaterial({
         color: 0x88ccff, roughness: 0.1, metalness: 0.8, transparent: true, opacity: 0.8
@@ -435,7 +704,6 @@ function loadModel(path, position, scale, rotation, callback) {
         if (callback) callback(model);
     }, undefined, (err) => {
         console.warn('Model load failed:', path, err);
-        // Fallback to primitive
         if (callback) callback(null);
     });
 }
@@ -456,7 +724,6 @@ function addBooksToBookshelf(bsX, bsZ) {
                 new THREE.BoxGeometry(bw, bh, bd),
                 new THREE.MeshStandardMaterial({ color: color, roughness: 0.7, metalness: 0.05 })
             );
-            // Books oriented along the shelf depth (Z)
             book.position.set(bsX, baseY + bh / 2 + 0.02, bsZ + bx);
             book.rotation.z = (Math.random() - 0.5) * 0.06;
             book.castShadow = true;
@@ -468,17 +735,12 @@ function addBooksToBookshelf(bsX, bsZ) {
 
 // ============= FURNITURE =============
 function buildFurniture() {
-    // === Main table (center-left) - uses Poly Haven round_wooden_table ===
-    // Model height ~1.0 at scale 1.0, so at scale 0.8 top is at ~0.80
     loadModel('round_wooden_table_01/round_wooden_table_01.gltf',
         { x: -2.5, y: 0, z: -1 }, 0.8, { y: 0 });
 
-    // === Drawer cabinet / desk (right side) ===
-    // Model height ~1.88 at scale 1.0, too tall. Use scale 0.45 → top ~0.85
     loadModel('drawer_cabinet/drawer_cabinet.gltf',
         { x: 3.5, y: 0, z: 1.5 }, 0.45, { y: Math.PI / 2 }, (model) => {
             if (model) {
-                // Add interactive drawer hitbox
                 const drawerHitbox = new THREE.Mesh(
                     new THREE.BoxGeometry(0.5, 0.3, 0.4),
                     new THREE.MeshStandardMaterial({ visible: false })
@@ -490,34 +752,22 @@ function buildFurniture() {
             }
         });
 
-    // === Shelf on left wall - using small_wooden_table as shelf ===
-    // Model height ~0.53 at scale 1.0, at scale 1.8 → top ~0.96 (waist height shelf)
     loadModel('small_wooden_table_01/small_wooden_table_01.gltf',
         { x: -ROOM_W / 2 + 0.5, y: 0, z: -1.5 }, 1.8, { y: Math.PI / 2 });
 
-    // === Small table for coffee machine (back-left) ===
-    // Model height ~0.53 at scale 1.5 → top ~0.80
     loadModel('small_wooden_table_01/small_wooden_table_01.gltf',
         { x: -3.5, y: 0, z: -3 }, 1.5, { y: 0 });
 
-    // === Table for radio (front-right) ===
-    // Model height ~0.53 at scale 1.4 → top ~0.74
     loadModel('small_wooden_table_01/small_wooden_table_01.gltf',
         { x: 3, y: 0, z: 3 }, 1.4, { y: Math.PI / 4 });
 
-    // === Table for lamp + sculpture (right wall) ===
-    // Model height ~1.0 at scale 0.75 → top ~0.75
     loadModel('round_wooden_table_01/round_wooden_table_01.gltf',
         { x: ROOM_W / 2 - 0.8, y: 0, z: -0.5 }, 0.75, { y: 0 });
 
-    // === Bookshelf (front-left) - Poly Haven worn bookshelf ===
-    // Model height ~2.06, at scale 1.0 fits well
     loadModel('wooden_bookshelf_worn/wooden_bookshelf_worn.gltf',
         { x: -ROOM_W / 2 + 0.35, y: 0, z: 2.5 }, 1.0, { y: Math.PI / 2 }, (model) => {
             if (model) {
-                // Add decorative books on shelves
                 addBooksToBookshelf(-ROOM_W / 2 + 0.35, 2.5);
-                // Add interactive book hitbox
                 const bookHitbox = new THREE.Mesh(
                     new THREE.BoxGeometry(0.15, 0.25, 0.2),
                     new THREE.MeshStandardMaterial({ visible: false })
@@ -529,7 +779,6 @@ function buildFurniture() {
             }
         });
 
-    // === Add UV wall hitbox for phone puzzle ===
     const uvWallHitbox = new THREE.Mesh(
         new THREE.PlaneGeometry(3, 2.5),
         new THREE.MeshStandardMaterial({ visible: false, side: THREE.DoubleSide })
@@ -541,161 +790,18 @@ function buildFurniture() {
     interactiveObjects.push(uvWallHitbox);
 }
 
-function createTable(x, y, z, w, h, d, mat) {
-    // Table top with beveled edges (thicker)
-    const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, d), mat);
-    top.position.set(x, h, z);
-    top.castShadow = true;
-    top.receiveShadow = true;
-    scene.add(top);
-
-    // Edge trim
-    const edgeMat = new THREE.MeshStandardMaterial({ color: 0x5a3d28, roughness: 0.4, metalness: 0.1 });
-    const frontEdge = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.02, 0.01), edgeMat);
-    frontEdge.position.set(x, h - 0.02, z + d / 2);
-    scene.add(frontEdge);
-    const backEdge = frontEdge.clone();
-    backEdge.position.z = z - d / 2;
-    scene.add(backEdge);
-
-    // Rounded legs
-    const legGeo = new THREE.CylinderGeometry(0.025, 0.02, h, 8);
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x4a3020, roughness: 0.4, metalness: 0.1 });
-    const offsets = [
-        [x - w / 2 + 0.05, h / 2, z - d / 2 + 0.05],
-        [x + w / 2 - 0.05, h / 2, z - d / 2 + 0.05],
-        [x - w / 2 + 0.05, h / 2, z + d / 2 - 0.05],
-        [x + w / 2 - 0.05, h / 2, z + d / 2 - 0.05],
-    ];
-    offsets.forEach(p => {
-        const leg = new THREE.Mesh(legGeo, legMat);
-        leg.position.set(...p);
-        leg.castShadow = true;
-        scene.add(leg);
-    });
-}
-
-function createDesk(x, y, z, w, h, d, mat) {
-    createTable(x, y, z, w, h, d, mat);
-    // Drawer
-    const drawer = new THREE.Mesh(
-        new THREE.BoxGeometry(w * 0.4, 0.12, d * 0.8),
-        new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.5 })
-    );
-    drawer.position.set(x + 0.1, h - 0.1, z);
-    drawer.userData = { type: 'drawer', promptText: 'درج المكتب', hasLighter: true };
-    drawer.castShadow = true;
-    scene.add(drawer);
-    interactiveObjects.push(drawer);
-
-    // Drawer handle
-    const handle = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.02, 0.02),
-        new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8 })
-    );
-    handle.position.set(x + 0.1, h - 0.1, z + d * 0.4 + 0.01);
-    scene.add(handle);
-}
-
-function createShelf(x, y, z, w, h, d, mat) {
-    const shelf = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    shelf.position.set(x + w / 2, y, z);
-    shelf.castShadow = true;
-    scene.add(shelf);
-}
-
-function createBookshelf(x, y, z) {
-    const shelfMat = new THREE.MeshStandardMaterial({ map: woodTex(), roughness: 0.5 });
-
-    // Back panel
-    const back = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.2, 0.03), shelfMat);
-    back.position.set(x, 1.1, z - 0.13);
-    back.castShadow = true;
-    scene.add(back);
-
-    // Side panels
-    const sideMat = shelfMat.clone();
-    const sideL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.2, 0.32), sideMat);
-    sideL.position.set(x - 0.48, 1.1, z);
-    sideL.castShadow = true;
-    scene.add(sideL);
-    const sideR = sideL.clone();
-    sideR.position.x = x + 0.48;
-    scene.add(sideR);
-
-    // Shelves (4 horizontal shelves)
-    const shelfYs = [0.05, 0.6, 1.2, 1.8];
-    shelfYs.forEach(sy => {
-        const sh = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.03, 0.32), shelfMat);
-        sh.position.set(x, sy, z);
-        sh.receiveShadow = true;
-        scene.add(sh);
-    });
-    // Top
-    const topSh = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.03, 0.32), shelfMat);
-    topSh.position.set(x, 2.2, z);
-    scene.add(topSh);
-
-    // Books on shelves
-    const bookColors = [0xaa2222, 0x2244aa, 0x22aa44, 0xaa8822, 0x7722aa, 0x22aaaa, 0xaa4400, 0x6644aa];
-    const shelfBookYs = [0.07, 0.62, 1.22, 1.82];
-
-    shelfBookYs.forEach((baseY, shelfIdx) => {
-        const numBooks = 6 + Math.floor(Math.random() * 3);
-        let bx = x - 0.42;
-        for (let i = 0; i < numBooks; i++) {
-            const bw = 0.04 + Math.random() * 0.05;
-            const bh = 0.2 + Math.random() * 0.12;
-            const bd = 0.18 + Math.random() * 0.06;
-            const color = bookColors[(i + shelfIdx * 3) % bookColors.length];
-
-            // Book spine texture
-            const bookTex = makeCanvasTex(64, 128, (ctx, w, h) => {
-                ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
-                ctx.fillRect(0, 0, w, h);
-                // Spine detail lines
-                ctx.fillStyle = 'rgba(255,255,255,0.15)';
-                ctx.fillRect(0, 8, w, 2);
-                ctx.fillRect(0, h - 10, w, 2);
-                // Title area
-                ctx.fillStyle = 'rgba(255,215,0,0.3)';
-                ctx.fillRect(4, h * 0.3, w - 8, h * 0.15);
-            });
-
-            const book = new THREE.Mesh(
-                new THREE.BoxGeometry(bw, bh, bd),
-                new THREE.MeshStandardMaterial({ map: bookTex, roughness: 0.6 })
-            );
-            book.position.set(bx + bw / 2, baseY + bh / 2 + 0.015, z + 0.02);
-            book.rotation.z = (Math.random() - 0.5) * 0.08;
-            book.castShadow = true;
-            scene.add(book);
-
-            // One book on second shelf hides a mirror
-            if (shelfIdx === 2 && i === 3) {
-                book.userData = { type: 'bookWithMirror', promptText: 'كتاب مثير للاهتمام', mirrorIndex: 1 };
-                interactiveObjects.push(book);
-            }
-
-            bx += bw + 0.005;
-        }
-    });
-}
-
 // ============= PUZZLE OBJECTS =============
 function buildPuzzleObjects() {
-    // === Light source (spotlight on floor for mirror puzzle) ===
+    // === Light source for mirror puzzle ===
     const lightHousing = new THREE.Mesh(
         new THREE.CylinderGeometry(0.08, 0.1, 0.15, 8),
         new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.6 })
     );
     lightHousing.position.set(-3, 0.08, -ROOM_D / 2 + 0.5);
     scene.add(lightHousing);
-
-    // Light beam visualization
     buildLightBeam();
 
-    // === Mirror bases (3 positions where mirrors need to be placed) ===
+    // === Mirror bases ===
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.4, roughness: 0.4 });
     const basePositions = [
         { x: -3, z: -2, rotY: Math.PI / 4 },
@@ -711,12 +817,9 @@ function buildPuzzleObjects() {
         mirrorBases.push(base);
     });
 
-    // === Hidden mirrors (3 mirrors to find) ===
-    // Mirror 0: in the desk drawer (found when opening drawer)
-    // Mirror 1: behind a book (found when clicking book)
-    // Mirror 2: under a shelf item
-
-    // Mirror under shelf
+    // Mirror 0: in desk drawer (found when opening)
+    // Mirror 1: behind book on bookshelf
+    // Mirror 2: under shelf
     const hiddenMirror = new THREE.Mesh(
         new THREE.BoxGeometry(0.12, 0.01, 0.08),
         new THREE.MeshStandardMaterial({ color: 0xaaccee, metalness: 0.9, roughness: 0.1 })
@@ -733,12 +836,12 @@ function buildPuzzleObjects() {
     );
     paperMesh.position.set(-2.5, 0.82, -1);
     paperMesh.rotation.x = -Math.PI / 2;
-    paperMesh.userData = { type: 'paper', promptText: 'ورقة بيضاء', pickable: true, invName: 'ورقة', invIcon: '📄' };
+    paperMesh.userData = { type: 'paper', promptText: 'ورقة بيضاء', pickable: true, invName: 'ورقة' };
     paperMesh.castShadow = true;
     scene.add(paperMesh);
     interactiveObjects.push(paperMesh);
 
-    // === Puzzle 2: Phone on desk (detailed mesh) ===
+    // === Puzzle 2: Phone on desk ===
     const phoneGroup = new THREE.Group();
     const phoneBody = new THREE.Mesh(
         new THREE.BoxGeometry(0.07, 0.008, 0.14),
@@ -763,69 +866,16 @@ function buildPuzzleObjects() {
     phoneGroup.castShadow = true;
     scene.add(phoneGroup);
     phoneMesh = phoneGroup;
-    phoneMesh.userData = { type: 'phone', promptText: 'هاتف ذكي', pickable: true, invName: 'هاتف', invIcon: '📱' };
+    phoneMesh.userData = { type: 'phone', promptText: 'هاتف ذكي', pickable: true, invName: 'هاتف' };
     interactiveObjects.push(phoneMesh);
 
-    // === Puzzle 3: Abstract painting on wall ===
-    // Strategy: Paint is all in red/warm tones. The number is drawn in cyan (opposite of red).
-    // Both blend together visually. The red filter removes red and reveals cyan number as dark.
-    const paintingCanvas = document.createElement('canvas');
-    paintingCanvas.width = 256;
-    paintingCanvas.height = 256;
-    const pCtx = paintingCanvas.getContext('2d');
-    // Dark warm background
-    pCtx.fillStyle = '#8b4513';
-    pCtx.fillRect(0, 0, 256, 256);
-    // Many chaotic lines in reds, oranges, yellows, browns
-    for (let i = 0; i < 200; i++) {
-        const r = 120 + Math.floor(Math.random() * 135);
-        const g = Math.floor(Math.random() * 80);
-        const b = Math.floor(Math.random() * 50);
-        pCtx.strokeStyle = `rgb(${r},${g},${b})`;
-        pCtx.lineWidth = 2 + Math.random() * 5;
-        pCtx.beginPath();
-        pCtx.moveTo(Math.random() * 256, Math.random() * 256);
-        pCtx.bezierCurveTo(
-            Math.random() * 256, Math.random() * 256,
-            Math.random() * 256, Math.random() * 256,
-            Math.random() * 256, Math.random() * 256
-        );
-        pCtx.stroke();
-    }
-    // Draw number in a color that is invisible among the chaos but revealed by red filter
-    // Number in same red/brown color as background - invisible to the eye
-    pCtx.fillStyle = 'rgba(139, 69, 19, 0.95)';
-    pCtx.font = 'bold 100px Arial';
-    pCtx.textAlign = 'center';
-    pCtx.textBaseline = 'middle';
-    pCtx.fillText(PUZZLE_DIGITS[2], 128, 128);
-    // More chaotic lines over the number to further hide it
-    for (let i = 0; i < 60; i++) {
-        const r = 130 + Math.floor(Math.random() * 125);
-        const g = 20 + Math.floor(Math.random() * 60);
-        const b = Math.floor(Math.random() * 40);
-        pCtx.strokeStyle = `rgb(${r},${g},${b})`;
-        pCtx.lineWidth = 1 + Math.random() * 3;
-        pCtx.beginPath();
-        pCtx.moveTo(Math.random() * 256, Math.random() * 256);
-        pCtx.bezierCurveTo(
-            Math.random() * 256, Math.random() * 256,
-            Math.random() * 256, Math.random() * 256,
-            Math.random() * 256, Math.random() * 256
-        );
-        pCtx.stroke();
-    }
-
-    const paintTex = new THREE.CanvasTexture(paintingCanvas);
-
-    // Load fancy picture frame from Poly Haven
+    // === Puzzle 3: Abstract painting on wall – uses real images ===
     loadModel('fancy_picture_frame_01/fancy_picture_frame_01.gltf',
         { x: -ROOM_W / 2 + 0.05, y: 1.8, z: 0.5 }, 1.5, { y: Math.PI / 2 });
 
-    // Painting canvas with puzzle (on top of frame)
     paintingMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(0.65, 0.50),
-        new THREE.MeshStandardMaterial({ map: paintTex, roughness: 0.8 })
+        new THREE.MeshStandardMaterial({ map: paintingNormalTex, roughness: 0.8 })
     );
     paintingMesh.position.set(-ROOM_W / 2 + 0.06, 1.8, 0.5);
     paintingMesh.rotation.y = Math.PI / 2;
@@ -833,20 +883,19 @@ function buildPuzzleObjects() {
     scene.add(paintingMesh);
     interactiveObjects.push(paintingMesh);
 
-    // Red filter (hidden near shelf)
+    // Red filter – placed on bookshelf area
     filterMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(0.15, 0.2),
         new THREE.MeshStandardMaterial({ color: 0xff2222, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
     );
-    filterMesh.position.set(-ROOM_W / 2 + 0.5, 1.82, -1.8);
+    filterMesh.position.set(-ROOM_W / 2 + 0.4, 1.1, 2.3);
     filterMesh.rotation.x = -Math.PI / 2;
-    filterMesh.userData = { type: 'redFilter', promptText: 'ورقة بلاستيكية حمراء', pickable: true, invName: 'فلتر أحمر', invIcon: '🔴' };
+    filterMesh.userData = { type: 'redFilter', promptText: 'ورقة بلاستيكية حمراء', pickable: true, invName: 'فلتر أحمر' };
     filterMesh.castShadow = true;
     scene.add(filterMesh);
     interactiveObjects.push(filterMesh);
 
     // === Puzzle 4: Black cup and coffee machine ===
-    // Coffee machine - detailed mesh
     const cmGroup = new THREE.Group();
     const cmBody = new THREE.Mesh(
         new THREE.BoxGeometry(0.25, 0.32, 0.2),
@@ -885,7 +934,6 @@ function buildPuzzleObjects() {
     cmBtn.position.set(0.08, 0.25, 0.101);
     cmBtn.rotation.x = Math.PI / 2;
     cmGroup.add(cmBtn);
-    // Side panel detail
     const cmSide = new THREE.Mesh(
         new THREE.PlaneGeometry(0.18, 0.25),
         new THREE.MeshStandardMaterial({ color: 0x151515, metalness: 0.4, roughness: 0.3 })
@@ -893,7 +941,6 @@ function buildPuzzleObjects() {
     cmSide.position.set(0.126, 0.16, 0);
     cmSide.rotation.y = Math.PI / 2;
     cmGroup.add(cmSide);
-
     cmGroup.position.set(-3.5, 0.80, -3);
     cmGroup.castShadow = true;
     scene.add(cmGroup);
@@ -901,24 +948,19 @@ function buildPuzzleObjects() {
     coffeeMachineMesh.userData = { type: 'coffeeMachine', promptText: 'آلة صنع قهوة' };
     interactiveObjects.push(coffeeMachineMesh);
 
-    // Black cup - detailed ceramic
     cupMesh = createCup(-3.2, 0.80, -3);
-    cupMesh.userData = { type: 'cup', promptText: 'كوب أسود', pickable: true, invName: 'كوب', invIcon: '☕' };
+    cupMesh.userData = { type: 'cup', promptText: 'كوب أسود', pickable: true, invName: 'كوب' };
     interactiveObjects.push(cupMesh);
 
     // === Puzzle 5: Metal sculpture, desk lamp, X mark ===
-    // X mark on desk
     xMarkMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(0.15, 0.15),
-        new THREE.MeshStandardMaterial({
-            color: 0xff0000, transparent: true, opacity: 0.6, side: THREE.DoubleSide
-        })
+        new THREE.MeshStandardMaterial({ color: 0xff0000, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
     );
     xMarkMesh.position.set(ROOM_W / 2 - 0.8, 0.76, -0.5);
     xMarkMesh.rotation.x = -Math.PI / 2;
     scene.add(xMarkMesh);
 
-    // Draw X on it
     const xCanvas = document.createElement('canvas');
     xCanvas.width = 64; xCanvas.height = 64;
     const xCtx = xCanvas.getContext('2d');
@@ -930,12 +972,10 @@ function buildPuzzleObjects() {
     xMarkMesh.material.color = new THREE.Color(0xffffff);
     xMarkMesh.material.needsUpdate = true;
 
-    // Metal sculpture
     sculptureMesh = createSculpture(ROOM_W / 2 - 1.5, 0.76, 0.5);
-    sculptureMesh.userData = { type: 'sculpture', promptText: 'مجسم معدني', pickable: true, invName: 'مجسم', invIcon: '🗿' };
+    sculptureMesh.userData = { type: 'sculpture', promptText: 'مجسم معدني', pickable: true, invName: 'مجسم' };
     interactiveObjects.push(sculptureMesh);
 
-    // Desk lamp - load Poly Haven GLTF model
     loadModel('desk_lamp_arm_01/desk_lamp_arm_01.gltf',
         { x: ROOM_W / 2 - 0.5, y: 0.75, z: -0.8 }, 0.35, { y: Math.PI }, (model) => {
             if (model) {
@@ -944,7 +984,6 @@ function buildPuzzleObjects() {
                 interactiveObjects.push(deskLampMesh);
             }
         });
-    // Fallback hitbox in case model takes time to load
     const lampHitbox = new THREE.Mesh(
         new THREE.BoxGeometry(0.2, 0.3, 0.2),
         new THREE.MeshStandardMaterial({ visible: false })
@@ -955,7 +994,7 @@ function buildPuzzleObjects() {
     interactiveObjects.push(lampHitbox);
     deskLampMesh = lampHitbox;
 
-    // === Puzzle 6: Classic radio - load Poly Haven vintage_radio_transceiver ===
+    // === Puzzle 6: Radio ===
     loadModel('vintage_radio_transceiver/vintage_radio_transceiver.gltf',
         { x: 3, y: 0.75, z: 3 }, 2.0, { y: 0 }, (model) => {
             if (model) {
@@ -964,7 +1003,6 @@ function buildPuzzleObjects() {
                 interactiveObjects.push(radioMesh);
             }
         });
-    // Fallback hitbox for radio
     const radioHitbox = new THREE.Mesh(
         new THREE.BoxGeometry(0.3, 0.2, 0.15),
         new THREE.MeshStandardMaterial({ visible: false })
@@ -975,7 +1013,7 @@ function buildPuzzleObjects() {
     interactiveObjects.push(radioHitbox);
     radioMesh = radioHitbox;
 
-    // FM hint note (stuck somewhere)
+    // FM hint note
     const hintCanvas = document.createElement('canvas');
     hintCanvas.width = 128; hintCanvas.height = 64;
     const hCtx = hintCanvas.getContext('2d');
@@ -985,7 +1023,6 @@ function buildPuzzleObjects() {
     hCtx.font = '18px Arial';
     hCtx.textAlign = 'center';
     hCtx.fillText('FM 104.5', 64, 38);
-
     const hintNote = new THREE.Mesh(
         new THREE.PlaneGeometry(0.12, 0.06),
         new THREE.MeshStandardMaterial({ map: new THREE.CanvasTexture(hintCanvas), roughness: 0.9, side: THREE.DoubleSide })
@@ -1005,7 +1042,6 @@ function createCup(x, y, z) {
     );
     body.position.y = 0.045;
     group.add(body);
-
     const handle = new THREE.Mesh(
         new THREE.TorusGeometry(0.02, 0.005, 6, 8, Math.PI),
         new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 })
@@ -1013,7 +1049,6 @@ function createCup(x, y, z) {
     handle.position.set(0.04, 0.045, 0);
     handle.rotation.z = Math.PI / 2;
     group.add(handle);
-
     group.position.set(x, y, z);
     group.castShadow = true;
     scene.add(group);
@@ -1023,27 +1058,19 @@ function createCup(x, y, z) {
 function createSculpture(x, y, z) {
     const group = new THREE.Group();
     const mat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.7, roughness: 0.3 });
-
-    // Create a shape that casts a shadow looking like the digit
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.02, 8), mat);
     base.position.y = 0.01;
     group.add(base);
-
-    // Vertical piece
     const v1 = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.15, 0.02), mat);
     v1.position.set(0, 0.085, 0);
     group.add(v1);
-
-    // Angled piece (creates shadow shape)
     const v2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.02), mat);
     v2.position.set(0.02, 0.12, 0);
     v2.rotation.z = 0.3;
     group.add(v2);
-
     const v3 = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.06, 0.02), mat);
     v3.position.set(0.04, 0.08, 0);
     group.add(v3);
-
     group.position.set(x, y, z);
     group.castShadow = true;
     group.traverse(c => { if (c.isMesh) c.castShadow = true; });
@@ -1051,49 +1078,17 @@ function createSculpture(x, y, z) {
     return group;
 }
 
-function createDeskLamp(x, y, z) {
-    const group = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.4, roughness: 0.4 });
-
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.02, 12), mat);
-    base.position.y = 0.01;
-    group.add(base);
-
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.3, 6), mat);
-    arm.position.set(0, 0.16, 0);
-    arm.rotation.z = -0.3;
-    group.add(arm);
-
-    const shade = new THREE.Mesh(
-        new THREE.ConeGeometry(0.06, 0.08, 12, 1, true),
-        new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide })
-    );
-    shade.position.set(-0.08, 0.28, 0);
-    shade.rotation.z = Math.PI;
-    group.add(shade);
-
-    group.position.set(x, y, z);
-    group.castShadow = true;
-    scene.add(group);
-    return group;
-}
-
 // ============= LIGHT BEAM =============
 function buildLightBeam() {
-    // Simple line from light source toward mirrors
     updateBeamVisualization();
 }
 
 function updateBeamVisualization() {
-    // Remove old segments
     beamSegments.forEach(s => scene.remove(s));
     beamSegments = [];
-
     if (!state.lightBeamActive) return;
 
     const points = [new THREE.Vector3(-3, 0.15, -ROOM_D / 2 + 0.5)];
-
-    // Add mirror reflection points
     const mirrorPositions = [
         new THREE.Vector3(-3, 0.15, -2),
         new THREE.Vector3(0, 0.15, -2.5),
@@ -1108,19 +1103,16 @@ function updateBeamVisualization() {
             points.push(mp);
             lastPoint = mp;
         } else {
-            // Beam stops here
             const dir = mirrorPositions[i].clone().sub(lastPoint).normalize();
             points.push(lastPoint.clone().add(dir.multiplyScalar(0.5)));
             break;
         }
     }
 
-    // If all mirrors placed, beam goes to diamond
     if (state.mirrorsPlaced[0] && state.mirrorsPlaced[1] && state.mirrorsPlaced[2]) {
         points.push(diamondMesh.position.clone());
     }
 
-    // Create beam line segments
     const beamMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2, transparent: true, opacity: 0.8 });
     for (let i = 0; i < points.length - 1; i++) {
         const geo = new THREE.BufferGeometry().setFromPoints([points[i], points[i + 1]]);
@@ -1133,12 +1125,12 @@ function updateBeamVisualization() {
 // ============= RED HERRINGS =============
 function buildRedHerrings() {
     const items = [
-        { geo: new THREE.CylinderGeometry(0.03, 0.025, 0.08, 8), color: 0x888888, pos: [-2.3, 0.84, -0.8], name: 'كوب فارغ', icon: '🥤' },
-        { geo: new THREE.BoxGeometry(0.02, 0.08, 0.06), color: 0xccaa00, pos: [3.6, 0.88, 1.3], name: 'مفتاح قديم', icon: '🔑' },
-        { geo: new THREE.BoxGeometry(0.15, 0.01, 0.2), color: 0x4444aa, pos: [-2.2, 0.82, -1.2], name: 'مجلد فارغ', icon: '📁' },
-        { geo: new THREE.BoxGeometry(0.06, 0.08, 0.04), color: 0x228822, pos: [3.8, 0.88, 1.7], name: 'علبة صغيرة', icon: '📦' },
-        { geo: new THREE.SphereGeometry(0.03, 8, 8), color: 0xff4444, pos: [-3.3, 0.85, -2.8], name: 'كرة زجاجية', icon: '🔮' },
-        { geo: new THREE.CylinderGeometry(0.015, 0.015, 0.12, 6), color: 0x333333, pos: [-2.7, 0.82, -1], name: 'قلم', icon: '✏️' },
+        { geo: new THREE.CylinderGeometry(0.03, 0.025, 0.08, 8), color: 0x888888, pos: [-2.3, 0.84, -0.8], name: 'كوب فارغ' },
+        { geo: new THREE.BoxGeometry(0.02, 0.08, 0.06), color: 0xccaa00, pos: [3.6, 0.88, 1.3], name: 'مفتاح قديم' },
+        { geo: new THREE.BoxGeometry(0.15, 0.01, 0.2), color: 0x4444aa, pos: [-2.2, 0.82, -1.2], name: 'مجلد فارغ' },
+        { geo: new THREE.BoxGeometry(0.06, 0.08, 0.04), color: 0x228822, pos: [3.8, 0.88, 1.7], name: 'علبة صغيرة' },
+        { geo: new THREE.SphereGeometry(0.03, 8, 8), color: 0xff4444, pos: [-3.3, 0.85, -2.8], name: 'كرة زجاجية' },
+        { geo: new THREE.CylinderGeometry(0.015, 0.015, 0.12, 6), color: 0x333333, pos: [-2.7, 0.82, -1], name: 'قلم' },
     ];
 
     items.forEach(item => {
@@ -1147,7 +1139,7 @@ function buildRedHerrings() {
             new THREE.MeshStandardMaterial({ color: item.color, roughness: 0.5 })
         );
         mesh.position.set(...item.pos);
-        mesh.userData = { type: 'redHerring', promptText: item.name, pickable: true, invName: item.name, invIcon: item.icon };
+        mesh.userData = { type: 'redHerring', promptText: item.name, pickable: true, invName: item.name };
         mesh.castShadow = true;
         scene.add(mesh);
         interactiveObjects.push(mesh);
@@ -1156,15 +1148,12 @@ function buildRedHerrings() {
 
 // ============= LIGHTS =============
 function setupLights() {
-    // Ambient for atmospheric room - enough to see, but not overly bright
     const ambient = new THREE.AmbientLight(0x443322, 0.6);
     scene.add(ambient);
 
-    // Hemisphere light: warm top, cool bottom (simulates indoor bounce)
     const hemi = new THREE.HemisphereLight(0x8b7355, 0x2a2a3a, 0.5);
     scene.add(hemi);
 
-    // Main ceiling light (center) - warm tungsten bulb
     const ceiling = new THREE.PointLight(0xffaa55, 1.2, 12);
     ceiling.position.set(0, ROOM_H - 0.2, 0);
     ceiling.castShadow = true;
@@ -1172,38 +1161,31 @@ function setupLights() {
     ceiling.shadow.bias = -0.002;
     scene.add(ceiling);
 
-    // Light bulb mesh with glow
     const bulbMat = new THREE.MeshStandardMaterial({ emissive: 0xffaa44, emissiveIntensity: 4, color: 0xffffcc, transparent: true, opacity: 0.9 });
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 12), bulbMat);
     bulb.position.copy(ceiling.position);
     scene.add(bulb);
 
-    // Subtle ceiling light near back wall
     const ceil2 = new THREE.PointLight(0xffaa55, 0.6, 8);
     ceil2.position.set(-2, ROOM_H - 0.3, -2.5);
     scene.add(ceil2);
 
-    // Subtle ceiling light near front
     const ceil3 = new THREE.PointLight(0xffaa55, 0.4, 8);
     ceil3.position.set(2, ROOM_H - 0.3, 2);
     scene.add(ceil3);
 
-    // Decorative warm spot near desk area
     const deskSpot = new THREE.SpotLight(0xffcc88, 0.8, 6, Math.PI / 6, 0.5);
     deskSpot.position.set(3.5, ROOM_H - 0.3, 1.5);
     deskSpot.target.position.set(3.5, 0, 1.5);
     scene.add(deskSpot);
     scene.add(deskSpot.target);
 
-    // Load and add vintage oil lamp model for ambiance
     loadModel('vintage_oil_lamp/vintage_oil_lamp.gltf',
         { x: -2.5, y: 0.80, z: -0.7 }, 0.4, { y: 0 });
-    // Small point light near oil lamp
     const oilLampLight = new THREE.PointLight(0xff8833, 0.5, 4);
     oilLampLight.position.set(-2.5, 1.1, -0.7);
     scene.add(oilLampLight);
 
-    // Spotlight for mirror puzzle (white light on floor)
     lightSpotlight = new THREE.SpotLight(0xffffff, 1.5, 8, Math.PI / 8, 0.3);
     lightSpotlight.position.set(-3, 0.5, -ROOM_D / 2 + 0.5);
     lightSpotlight.target.position.set(-3, 0, -2);
@@ -1218,7 +1200,6 @@ function setupControls() {
     const canvas = renderer.domElement;
 
     if (!isMobile) {
-        // PC: Pointer Lock
         canvas.addEventListener('click', () => {
             if (!state.overlayOpen && state.gameStarted && !state.gameEnded) {
                 canvas.requestPointerLock();
@@ -1238,34 +1219,41 @@ function setupControls() {
             camera.quaternion.setFromEuler(euler);
         });
 
-        // AZERTY: S=forward, Z=back, Q=left, D=right
+        // W=forward, S=backward, A/Q=left, D=right
         document.addEventListener('keydown', (e) => {
             if (state.overlayOpen) return;
             switch (e.code) {
-                case 'KeyS': case 'KeyW': moveForward = true; break;
-                case 'KeyZ': moveBackward = true; break;
+                case 'KeyW': case 'KeyZ': moveForward = true; break;
+                case 'KeyS': moveBackward = true; break;
                 case 'KeyA': case 'KeyQ': moveLeft = true; break;
                 case 'KeyD': moveRight = true; break;
                 case 'KeyE': case 'Space': tryInteract(); break;
+                case 'Tab':
+                    e.preventDefault();
+                    cycleHeldItem(1);
+                    break;
             }
         });
 
         document.addEventListener('keyup', (e) => {
             switch (e.code) {
-                case 'KeyS': case 'KeyW': moveForward = false; break;
-                case 'KeyZ': moveBackward = false; break;
+                case 'KeyW': case 'KeyZ': moveForward = false; break;
+                case 'KeyS': moveBackward = false; break;
                 case 'KeyA': case 'KeyQ': moveLeft = false; break;
                 case 'KeyD': moveRight = false; break;
             }
         });
 
-        // Click to interact
+        // Scroll wheel to cycle items
+        document.addEventListener('wheel', (e) => {
+            if (state.overlayOpen) return;
+            cycleHeldItem(e.deltaY > 0 ? 1 : -1);
+        });
+
         canvas.addEventListener('mousedown', (e) => {
             if (isPointerLocked && e.button === 0) tryInteract();
         });
-
     } else {
-        // Mobile controls
         setupMobileControls();
     }
 }
@@ -1316,7 +1304,6 @@ function setupMobileControls() {
     joystickZone.addEventListener('touchend', resetJoystick);
     joystickZone.addEventListener('touchcancel', resetJoystick);
 
-    // Look zone
     lookZone.addEventListener('touchstart', (e) => {
         e.preventDefault();
         const t = e.changedTouches[0];
@@ -1334,7 +1321,6 @@ function setupMobileControls() {
                 const dy = t.clientY - lookData.lastY;
                 lookData.lastX = t.clientX;
                 lookData.lastY = t.clientY;
-
                 euler.setFromQuaternion(camera.quaternion);
                 euler.y -= dx * 0.004;
                 euler.x -= dy * 0.004;
@@ -1346,7 +1332,6 @@ function setupMobileControls() {
 
     lookZone.addEventListener('touchend', () => { lookTouch = null; lookData.active = false; });
     lookZone.addEventListener('touchcancel', () => { lookTouch = null; lookData.active = false; });
-
     interactBtn.addEventListener('touchstart', (e) => { e.preventDefault(); tryInteract(); }, { passive: false });
 }
 
@@ -1355,18 +1340,17 @@ function tryInteract() {
     if (!currentHover || state.overlayOpen || state.gameEnded) return;
     const obj = currentHover;
     const data = obj.userData;
+    const activeItem = getActiveItemName();
 
     switch (data.type) {
         case 'paper':
-            if (data.pickable && !hasItem('ورقة')) {
+            if (data.pickable) {
                 pickupItem(obj, data);
             }
             break;
         case 'phone':
             if (data.pickable && !hasItem('هاتف')) {
                 pickupItem(obj, data);
-            } else if (hasItem('هاتف')) {
-                openPhoneCamera();
             }
             break;
         case 'redFilter':
@@ -1387,12 +1371,12 @@ function tryInteract() {
         case 'drawer':
             if (data.hasLighter && !state.mirrorsFound[0]) {
                 state.mirrorsFound[0] = true;
-                addToInventory('مرآة ١', '🪞');
-                addToInventory('ولاعة', '🔥');
+                addHeldItem('مرآة');
+                setTimeout(() => addHeldItem('ولاعة'), 300);
                 showNotification('وجدت مرآة وولاعة في الدرج!');
                 data.hasLighter = false;
             } else if (data.hasLighter) {
-                addToInventory('ولاعة', '🔥');
+                addHeldItem('ولاعة');
                 showNotification('وجدت ولاعة في الدرج!');
                 data.hasLighter = false;
             }
@@ -1400,14 +1384,14 @@ function tryInteract() {
         case 'bookWithMirror':
             if (!state.mirrorsFound[data.mirrorIndex]) {
                 state.mirrorsFound[data.mirrorIndex] = true;
-                addToInventory('مرآة ٢', '🪞');
+                addHeldItem('مرآة');
                 showNotification('وجدت مرآة خلف الكتاب!');
             }
             break;
         case 'hiddenMirror':
             if (!state.mirrorsFound[data.mirrorIndex]) {
                 state.mirrorsFound[data.mirrorIndex] = true;
-                addToInventory('مرآة ٣', '🪞');
+                addHeldItem('مرآة');
                 showNotification('وجدت مرآة صغيرة!');
                 obj.visible = false;
             }
@@ -1431,11 +1415,19 @@ function tryInteract() {
             openDoorLock();
             break;
         case 'fmHint':
-            showNotification('📻 FM 104.5');
+            showNotification('FM 104.5');
             break;
         case 'uvWall':
-            if (hasItem('هاتف') && state.selectedItem === 'هاتف') {
-                openPhoneCamera();
+            if (hasItem('هاتف')) {
+                // Switch to phone in hand
+                const phoneIdx = state.heldItems.findIndex(it => it.name === 'هاتف');
+                if (phoneIdx !== -1) {
+                    state.activeItemIndex = phoneIdx;
+                    showItemInHand('هاتف');
+                    phoneInHandActive = true;
+                    updateHeldItemsUI();
+                    showNotification('استخدم الهاتف لمسح هذا الحائط');
+                }
             }
             break;
         case 'redHerring':
@@ -1446,176 +1438,10 @@ function tryInteract() {
     }
 }
 
-// ============= INVENTORY =============
-function hasItem(name) {
-    return state.inventory.some(it => it.name === name);
-}
-
-function addToInventory(name, icon) {
-    if (hasItem(name)) return;
-    state.inventory.push({ name, icon });
-    updateInventoryUI();
-}
-
-function removeFromInventory(name) {
-    state.inventory = state.inventory.filter(it => it.name !== name);
-    if (state.selectedItem === name) state.selectedItem = null;
-    updateInventoryUI();
-}
-
-function pickupItem(mesh, data) {
-    addToInventory(data.invName, data.invIcon);
-    mesh.visible = false;
-    // Remove from interactive objects but keep reference
-    const idx = interactiveObjects.indexOf(mesh);
-    if (idx > -1) interactiveObjects.splice(idx, 1);
-    showNotification(`التقطت: ${data.invName}`);
-}
-
-function drawItemIcon(name) {
-    const c = document.createElement('canvas');
-    c.width = 48; c.height = 48;
-    const ctx = c.getContext('2d');
-    ctx.clearRect(0, 0, 48, 48);
-
-    switch(name) {
-        case 'ورقة':
-            ctx.fillStyle = '#f5f0e0'; ctx.fillRect(10, 6, 28, 36);
-            ctx.strokeStyle = '#aaa'; ctx.lineWidth = 0.5;
-            for (let y = 14; y < 38; y += 4) { ctx.beginPath(); ctx.moveTo(14, y); ctx.lineTo(34, y); ctx.stroke(); }
-            ctx.fillStyle = '#c5b896'; ctx.beginPath(); ctx.moveTo(28, 6); ctx.lineTo(38, 16); ctx.lineTo(28, 16); ctx.fill();
-            break;
-        case 'ولاعة':
-            ctx.fillStyle = '#b8b8b8'; ctx.fillRect(18, 12, 12, 28);
-            ctx.fillStyle = '#888'; ctx.fillRect(18, 12, 12, 6);
-            ctx.fillStyle = '#ff8c00'; ctx.beginPath(); ctx.moveTo(24, 12); ctx.quadraticCurveTo(20, 4, 24, 2); ctx.quadraticCurveTo(28, 4, 24, 12); ctx.fill();
-            break;
-        case 'هاتف':
-            ctx.fillStyle = '#222'; ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
-            ctx.fillRect(14, 4, 20, 40); ctx.strokeRect(14, 4, 20, 40);
-            ctx.fillStyle = '#1a2a44'; ctx.fillRect(16, 8, 16, 28);
-            ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(24, 40, 1.5, 0, Math.PI * 2); ctx.fill();
-            break;
-        case 'فلتر أحمر':
-            ctx.fillStyle = 'rgba(220, 20, 20, 0.5)'; ctx.fillRect(8, 8, 32, 32);
-            ctx.strokeStyle = '#cc0000'; ctx.lineWidth = 2; ctx.strokeRect(8, 8, 32, 32);
-            ctx.fillStyle = 'rgba(255, 100, 100, 0.3)'; ctx.fillRect(10, 10, 28, 28);
-            break;
-        case 'كوب':
-            ctx.fillStyle = '#333'; ctx.beginPath();
-            ctx.moveTo(16, 14); ctx.lineTo(14, 40); ctx.lineTo(34, 40); ctx.lineTo(32, 14); ctx.closePath(); ctx.fill();
-            ctx.strokeStyle = '#555'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(36, 26, 6, -0.5, 1.5); ctx.stroke();
-            break;
-        case 'مجسم':
-            ctx.fillStyle = '#888'; ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.moveTo(24, 6); ctx.lineTo(14, 20); ctx.lineTo(18, 22); ctx.lineTo(24, 14); ctx.lineTo(30, 22); ctx.lineTo(34, 20); ctx.closePath(); ctx.fill(); ctx.stroke();
-            ctx.fillStyle = '#777'; ctx.fillRect(20, 22, 8, 16);
-            ctx.fillStyle = '#666'; ctx.fillRect(14, 38, 20, 4);
-            break;
-        case 'كوب فارغ':
-            ctx.strokeStyle = '#999'; ctx.lineWidth = 1.5;
-            ctx.beginPath(); ctx.moveTo(16, 14); ctx.lineTo(14, 40); ctx.lineTo(34, 40); ctx.lineTo(32, 14); ctx.closePath(); ctx.stroke();
-            break;
-        case 'مفتاح قديم':
-            ctx.fillStyle = '#ccaa00'; ctx.strokeStyle = '#aa8800'; ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.arc(24, 14, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-            ctx.beginPath(); ctx.arc(24, 14, 3, 0, Math.PI * 2); ctx.strokeStyle = '#886600'; ctx.stroke();
-            ctx.fillRect(22, 20, 4, 22); ctx.fillRect(22, 34, 8, 3); ctx.fillRect(22, 38, 6, 3);
-            break;
-        case 'مجلد فارغ':
-            ctx.fillStyle = '#4444aa'; ctx.fillRect(8, 10, 32, 28);
-            ctx.fillStyle = '#5555cc'; ctx.fillRect(8, 10, 20, 5);
-            ctx.strokeStyle = '#333388'; ctx.lineWidth = 1; ctx.strokeRect(8, 10, 32, 28);
-            break;
-        case 'علبة صغيرة':
-            ctx.fillStyle = '#228822'; ctx.fillRect(12, 14, 24, 22);
-            ctx.strokeStyle = '#115511'; ctx.lineWidth = 1; ctx.strokeRect(12, 14, 24, 22);
-            ctx.beginPath(); ctx.moveTo(12, 14); ctx.lineTo(18, 8); ctx.lineTo(42, 8); ctx.lineTo(36, 14); ctx.closePath();
-            ctx.fillStyle = '#33aa33'; ctx.fill();
-            break;
-        case 'كرة زجاجية':
-            const rg = ctx.createRadialGradient(22, 20, 2, 24, 24, 12);
-            rg.addColorStop(0, 'rgba(255,200,200,0.8)'); rg.addColorStop(0.5, '#ff4444'); rg.addColorStop(1, '#880000');
-            ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(24, 24, 12, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.beginPath(); ctx.arc(20, 18, 3, 0, Math.PI * 2); ctx.fill();
-            break;
-        case 'قلم':
-            ctx.fillStyle = '#333'; ctx.save(); ctx.translate(24, 24); ctx.rotate(-0.5);
-            ctx.fillRect(-2, -18, 4, 32); ctx.fillStyle = '#aa8844'; ctx.fillRect(-2, -18, 4, 4);
-            ctx.fillStyle = '#222'; ctx.beginPath(); ctx.moveTo(-2, 14); ctx.lineTo(2, 14); ctx.lineTo(0, 20); ctx.closePath(); ctx.fill();
-            ctx.restore();
-            break;
-        default:
-            if (name.startsWith('مرآة')) {
-                ctx.fillStyle = '#3a2a18'; ctx.fillRect(12, 8, 24, 32);
-                ctx.fillStyle = '#ccddff'; ctx.fillRect(14, 10, 20, 28);
-                const g = ctx.createLinearGradient(14, 10, 34, 38);
-                g.addColorStop(0, 'rgba(255,255,255,0.4)'); g.addColorStop(1, 'rgba(255,255,255,0.05)');
-                ctx.fillStyle = g; ctx.fillRect(14, 10, 20, 28);
-            } else {
-                ctx.font = '28px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('?', 24, 24);
-            }
-    }
-    return c.toDataURL();
-}
-
-function updateInventoryUI() {
-    const container = document.getElementById('inventorySlots');
-    container.innerHTML = '';
-    state.inventory.forEach(item => {
-        const slot = document.createElement('div');
-        slot.className = 'inv-slot' + (state.selectedItem === item.name ? ' selected' : '');
-        // Use canvas icon
-        const iconUrl = drawItemIcon(item.name);
-        slot.style.backgroundImage = `url(${iconUrl})`;
-        slot.style.backgroundSize = 'contain';
-        slot.style.backgroundRepeat = 'no-repeat';
-        slot.style.backgroundPosition = 'center';
-        slot.title = item.name;
-        slot.onclick = () => {
-            state.selectedItem = state.selectedItem === item.name ? null : item.name;
-            updateInventoryUI();
-            handleItemUse(item.name);
-        };
-        container.appendChild(slot);
-    });
-}
-
-function handleItemUse(itemName) {
-    if (!state.selectedItem) return;
-
-    // Paper + Lighter = burn paper (Puzzle 1)
-    if (state.selectedItem === 'ولاعة' && hasItem('ورقة') && !state.paperBurned) {
-        solvePuzzle1();
-    } else if (state.selectedItem === 'ورقة' && hasItem('ولاعة') && !state.paperBurned) {
-        solvePuzzle1();
-    }
-
-    // Phone selected = open camera view
-    if (state.selectedItem === 'هاتف') {
-        openPhoneCamera();
-    }
-
-    // Red filter + painting = reveal number (Puzzle 3)
-    if (state.selectedItem === 'فلتر أحمر' && !state.filterApplied) {
-        // Will be resolved when clicking painting while holding filter
-    }
-}
-
 // ============= MIRROR PUZZLE (Step Zero) =============
 function placeMirrorOnBase(index) {
-    const mirrorNames = ['مرآة ١', 'مرآة ٢', 'مرآة ٣'];
-    const selectedMirror = mirrorNames.findIndex(name => state.selectedItem === name);
-
-    if (selectedMirror === -1) {
-        // Check if any mirror is selected
-        const anyMirror = state.inventory.find(it => it.name.startsWith('مرآة'));
-        if (anyMirror) {
-            showNotification('اختر مرآة من المخزن أولاً');
-        } else {
-            showNotification('تحتاج مرآة لوضعها هنا');
-        }
+    if (!hasItem('مرآة')) {
+        showNotification('تحتاج مرآة لوضعها هنا');
         return;
     }
 
@@ -1625,24 +1451,20 @@ function placeMirrorOnBase(index) {
     }
 
     state.mirrorsPlaced[index] = true;
-    removeFromInventory(mirrorNames[selectedMirror]);
+    removeHeldItem('مرآة');
 
-    // Show mirror on base - realistic glass mirror with frame
     const base = mirrorBases[index];
     const mirrorGroup = new THREE.Group();
-    // Mirror glass (highly reflective)
     const mirrorGlass = new THREE.Mesh(
         new THREE.PlaneGeometry(0.09, 0.11),
         new THREE.MeshStandardMaterial({ color: 0xccddff, metalness: 1.0, roughness: 0.02, envMapIntensity: 2.0 })
     );
     mirrorGroup.add(mirrorGlass);
-    // Mirror frame (dark wood)
     const frameGeo = new THREE.BoxGeometry(0.11, 0.13, 0.012);
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x3a2a18, roughness: 0.5, metalness: 0.1 });
     const mirrorFrame = new THREE.Mesh(frameGeo, frameMat);
     mirrorFrame.position.z = -0.003;
     mirrorGroup.add(mirrorFrame);
-    // Mirror back
     const mirrorBack = new THREE.Mesh(
         new THREE.PlaneGeometry(0.11, 0.13),
         new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 })
@@ -1658,7 +1480,6 @@ function placeMirrorOnBase(index) {
     showNotification('تم وضع المرآة!');
     updateBeamVisualization();
 
-    // Check if all 3 mirrors placed
     if (state.mirrorsPlaced[0] && state.mirrorsPlaced[1] && state.mirrorsPlaced[2]) {
         activateDiamond();
     }
@@ -1667,15 +1488,10 @@ function placeMirrorOnBase(index) {
 function activateDiamond() {
     state.diamondHit = true;
     state.lockActivated = true;
-
-    // Diamond glows
     diamondMesh.material.emissive = new THREE.Color(0x44aaff);
     diamondMesh.material.emissiveIntensity = 2;
-
-    // Lock screen activates
     lockScreenMesh.material.emissive = new THREE.Color(0x004444);
     lockScreenMesh.material.emissiveIntensity = 0.5;
-
     updateLockUI();
     playSound(800, 0.3, 'sine');
     setTimeout(() => playSound(1000, 0.3, 'sine'), 200);
@@ -1683,45 +1499,79 @@ function activateDiamond() {
     showNotification('تم تفعيل شاشة القفل!');
 }
 
-// ============= PUZZLE 1: Paper + Lighter =============
-function solvePuzzle1() {
-    if (state.solvedPuzzles[0]) return;
-    state.paperBurned = true;
-    state.solvedPuzzles[0] = true;
-    removeFromInventory('ورقة');
-    removeFromInventory('ولاعة');
+// ============= PUZZLE 1: Paper + Lighter (Auto-burn) =============
+function startBurnAnimation() {
+    if (state.burningInProgress || state.paperBurned) return;
+    state.burningInProgress = true;
 
-    // Add burned paper with number to inventory (visual feedback)
-    addToInventory('ورقة محروقة', '🔥');
+    // Switch to show paper in hand
+    const paperIdx = state.heldItems.findIndex(it => it.name === 'ورقة');
+    if (paperIdx !== -1) {
+        state.activeItemIndex = paperIdx;
+        showItemInHand('ورقة');
+        updateHeldItemsUI();
+    }
 
-    showNotification(`الورقة تحترق... ظهر الرقم ${PUZZLE_DIGITS[0]}!`);
-    playPuzzleSolvedSound();
-    fillLockDigit(0, PUZZLE_DIGITS[0]);
+    showNotification('الورقة تشتعل...');
+    playSound(200, 1.5, 'sawtooth');
+
+    // Create fire particles on the held item
+    let burnProgress = 0;
+    const burnInterval = setInterval(() => {
+        burnProgress += 0.02;
+
+        if (heldItemMesh) {
+            // Change paper color to burning
+            heldItemMesh.traverse(child => {
+                if (child.isMesh && child.material) {
+                    const r = 0.96 - burnProgress * 0.6;
+                    const g = 0.94 - burnProgress * 0.9;
+                    const b = 0.88 - burnProgress * 0.85;
+                    child.material.color.setRGB(Math.max(0.1, r), Math.max(0.05, g), Math.max(0, b));
+                    child.material.emissive = new THREE.Color(
+                        Math.min(1, burnProgress * 2),
+                        Math.min(0.3, burnProgress * 0.6),
+                        0
+                    );
+                    child.material.emissiveIntensity = burnProgress * 2;
+                }
+            });
+        }
+
+        if (burnProgress >= 1) {
+            clearInterval(burnInterval);
+            state.paperBurned = true;
+            state.solvedPuzzles[0] = true;
+            state.burningInProgress = false;
+
+            removeHeldItem('ورقة');
+            removeHeldItem('ولاعة');
+
+            showNotification(`الورقة احترقت... ظهر الرقم ${PUZZLE_DIGITS[0]}!`);
+            playPuzzleSolvedSound();
+            fillLockDigit(0, PUZZLE_DIGITS[0]);
+        }
+    }, 50);
 }
 
-// ============= PUZZLE 2: Phone Camera UV =============
-let phoneCameraActive = false;
-let phoneCameraRT, phoneCameraObj, uvNumberMesh;
-
+// ============= PUZZLE 2: Phone Camera (In-Hand) =============
 function setupPhoneCamera() {
-    // Render target for phone camera view
-    phoneCameraRT = new THREE.WebGLRenderTarget(512, 384);
-    phoneCameraObj = new THREE.PerspectiveCamera(60, 512 / 384, 0.1, 20);
+    phoneCameraRT = new THREE.WebGLRenderTarget(256, 192);
+    phoneCameraObj = new THREE.PerspectiveCamera(60, 256 / 192, 0.1, 20);
 }
 
-function openPhoneCamera() {
-    if (state.overlayOpen) return;
-    state.overlayOpen = true;
-    phoneCameraActive = true;
-    document.getElementById('phoneCameraOverlay').classList.remove('hidden');
-    if (isPointerLocked) document.exitPointerLock();
+function updatePhoneInHand() {
+    if (!phoneInHandActive || !phoneCameraRT || !heldItemMesh) return;
 
-    // Show UV number on wall (invisible normally, only through phone camera filter)
+    // Position phone camera at player position
+    phoneCameraObj.position.copy(camera.position);
+    phoneCameraObj.quaternion.copy(camera.quaternion);
+
+    // Show UV number on wall when phone is active
     if (!uvNumberMesh) {
         const uvCanvas = document.createElement('canvas');
         uvCanvas.width = 256; uvCanvas.height = 256;
         const ctx = uvCanvas.getContext('2d');
-        ctx.fillStyle = 'rgba(0,0,0,0)';
         ctx.clearRect(0, 0, 256, 256);
         ctx.fillStyle = 'rgba(0,255,100,0.9)';
         ctx.font = 'bold 200px Arial';
@@ -1741,90 +1591,79 @@ function openPhoneCamera() {
     }
     uvNumberMesh.visible = true;
 
-    // Solve puzzle 2 after viewing for 2 seconds
-    if (!state.solvedPuzzles[1]) {
-        setTimeout(() => {
-            if (phoneCameraActive) {
-                state.solvedPuzzles[1] = true;
-                showNotification(`كشفت الكاميرا عن الرقم ${PUZZLE_DIGITS[1]}!`);
-                playPuzzleSolvedSound();
-                fillLockDigit(1, PUZZLE_DIGITS[1]);
-            }
-        }, 2000);
-    }
-}
-
-function renderPhoneCamera() {
-    if (!phoneCameraActive || !phoneCameraRT) return;
-    // Position phone camera at player position, looking same direction
-    phoneCameraObj.position.copy(camera.position);
-    phoneCameraObj.quaternion.copy(camera.quaternion);
-
-    // Render scene to phone camera canvas with UV filter effect
+    // Render phone camera view
     renderer.setRenderTarget(phoneCameraRT);
     renderer.render(scene, phoneCameraObj);
     renderer.setRenderTarget(null);
 
-    // Draw to canvas with green UV filter
-    const canvas = document.getElementById('phoneCameraCanvas');
-    const ctx = canvas.getContext('2d');
-    const glCanvas = renderer.domElement;
+    // Update phone screen texture in hand
+    const phoneScreen = heldItemMesh.getObjectByName('phoneScreen');
+    if (phoneScreen) {
+        // Create UV-filtered texture from render target
+        const w = phoneCameraRT.width, h = phoneCameraRT.height;
+        const pixels = new Uint8Array(w * h * 4);
+        renderer.readRenderTargetPixels(phoneCameraRT, 0, 0, w, h, pixels);
 
-    // Read pixels from render target
-    const w = phoneCameraRT.width, h = phoneCameraRT.height;
-    const pixels = new Uint8Array(w * h * 4);
-    renderer.readRenderTargetPixels(phoneCameraRT, 0, 0, w, h, pixels);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        const imgData = ctx.createImageData(w, h);
 
-    // Create ImageData with UV filter
-    const imgData = ctx.createImageData(w, h);
-    for (let i = 0; i < pixels.length; i += 4) {
-        // Flip Y (WebGL renders upside down)
-        const row = Math.floor((i / 4) / w);
-        const col = (i / 4) % w;
-        const flippedIdx = ((h - 1 - row) * w + col) * 4;
-        const r = pixels[flippedIdx], g = pixels[flippedIdx + 1], b = pixels[flippedIdx + 2];
-        // UV green filter
-        const brightness = (r * 0.3 + g * 0.6 + b * 0.1);
-        imgData.data[i] = 0;
-        imgData.data[i + 1] = Math.min(255, brightness * 1.2 + 20);
-        imgData.data[i + 2] = 0;
-        imgData.data[i + 3] = 255;
+        for (let i = 0; i < pixels.length; i += 4) {
+            const row = Math.floor((i / 4) / w);
+            const col = (i / 4) % w;
+            const flippedIdx = ((h - 1 - row) * w + col) * 4;
+            const r = pixels[flippedIdx], g = pixels[flippedIdx + 1], b = pixels[flippedIdx + 2];
+            const brightness = (r * 0.3 + g * 0.6 + b * 0.1);
+            imgData.data[i] = 0;
+            imgData.data[i + 1] = Math.min(255, brightness * 1.2 + 20);
+            imgData.data[i + 2] = 0;
+            imgData.data[i + 3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        // Scan lines
+        ctx.fillStyle = 'rgba(0,0,0,0.05)';
+        for (let y = 0; y < h; y += 3) {
+            ctx.fillRect(0, y, w, 1);
+        }
+
+        if (phoneScreen.material.map) phoneScreen.material.map.dispose();
+        phoneScreen.material.map = new THREE.CanvasTexture(canvas);
+        phoneScreen.material.needsUpdate = true;
     }
-    ctx.putImageData(imgData, 0, 0);
 
-    // Scan line overlay
-    ctx.fillStyle = 'rgba(0,0,0,0.05)';
-    for (let y = 0; y < h; y += 3) {
-        ctx.fillRect(0, y, w, 1);
+    // Check if looking at UV wall to solve puzzle
+    if (!state.solvedPuzzles[1]) {
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const uvWallDir = new THREE.Vector3(0, 0, 1).normalize();
+        const dot = forward.dot(uvWallDir);
+        const distToWall = Math.abs(camera.position.z - (ROOM_D / 2));
+        if (dot > 0.5 && distToWall < 5) {
+            if (!state._phoneUVTimer) {
+                state._phoneUVTimer = Date.now();
+            } else if (Date.now() - state._phoneUVTimer > 2000) {
+                state.solvedPuzzles[1] = true;
+                showNotification(`كشفت كاميرا الهاتف عن الرقم ${PUZZLE_DIGITS[1]}!`);
+                playPuzzleSolvedSound();
+                fillLockDigit(1, PUZZLE_DIGITS[1]);
+            }
+        } else {
+            state._phoneUVTimer = null;
+        }
     }
-}
-
-function closePhoneCamera() {
-    document.getElementById('phoneCameraOverlay').classList.add('hidden');
-    state.overlayOpen = false;
-    phoneCameraActive = false;
-    if (uvNumberMesh) uvNumberMesh.visible = false;
 }
 
 // ============= PUZZLE 3: Painting + Red Filter =============
 function interactPainting() {
-    if (state.selectedItem === 'فلتر أحمر' && !state.solvedPuzzles[2]) {
+    const activeItem = getActiveItemName();
+    if (activeItem === 'فلتر أحمر' && !state.solvedPuzzles[2]) {
         state.filterApplied = true;
         state.solvedPuzzles[2] = true;
-        removeFromInventory('فلتر أحمر');
+        removeHeldItem('فلتر أحمر');
 
-        // Red filter: removes red tones, reveals number clearly
-        const c = document.createElement('canvas');
-        c.width = 256; c.height = 256;
-        const ctx = c.getContext('2d');
-        ctx.fillStyle = '#cc2222';
-        ctx.fillRect(0, 0, 256, 256);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 120px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(PUZZLE_DIGITS[2], 128, 128);
-        paintingMesh.material.map = new THREE.CanvasTexture(c);
+        // Switch painting to red-filtered image
+        paintingMesh.material.map = paintingRedTex;
         paintingMesh.material.needsUpdate = true;
 
         showNotification(`ظهر الرقم ${PUZZLE_DIGITS[2]} في اللوحة!`);
@@ -1837,18 +1676,15 @@ function interactPainting() {
 
 // ============= PUZZLE 4: Thermal Cup =============
 function interactCoffeeMachine() {
-    if (state.selectedItem === 'كوب' && !state.solvedPuzzles[3]) {
+    const activeItem = getActiveItemName();
+    if (activeItem === 'كوب' && !state.solvedPuzzles[3]) {
         state.cupPlaced = true;
-        removeFromInventory('كوب');
-
-        // Show cup under machine
+        removeHeldItem('كوب');
         cupMesh.position.set(-3.5, 0.80, -3 + 0.12);
         cupMesh.visible = true;
-
         showNotification('يتم تحضير القهوة...');
         state.coffeeBrewing = true;
 
-        // Animate cup color change
         let progress = 0;
         const brewInterval = setInterval(() => {
             progress += 0.02;
@@ -1856,11 +1692,8 @@ function interactCoffeeMachine() {
                 clearInterval(brewInterval);
                 state.coffeeRevealed = true;
                 state.solvedPuzzles[3] = true;
-
-                // Cup turns white revealing number
                 cupMesh.traverse(child => {
                     if (child.isMesh && child.geometry.type === 'CylinderGeometry') {
-                        // Create texture with number
                         const tc = document.createElement('canvas');
                         tc.width = 128; tc.height = 64;
                         const tctx = tc.getContext('2d');
@@ -1877,7 +1710,6 @@ function interactCoffeeMachine() {
                         });
                     }
                 });
-
                 showNotification(`ظهر الرقم ${PUZZLE_DIGITS[3]} على الكوب!`);
                 playPuzzleSolvedSound();
                 fillLockDigit(3, PUZZLE_DIGITS[3]);
@@ -1903,8 +1735,6 @@ function interactCoffeeMachine() {
 function interactDeskLamp() {
     if (!state.lampOn) {
         state.lampOn = true;
-
-        // Add spotlight for shadow
         const shadowLight = new THREE.SpotLight(0xffeecc, 2, 5, Math.PI / 6, 0.3);
         shadowLight.position.set(ROOM_W / 2 - 0.5, 1.2, -0.8);
         shadowLight.target.position.set(ROOM_W / 2 - 0.8, 0.5, -0.5);
@@ -1913,16 +1743,12 @@ function interactDeskLamp() {
         scene.add(shadowLight);
         scene.add(shadowLight.target);
 
-        // Lamp glow
         const glow = new THREE.PointLight(0xffeecc, 0.5, 3);
         glow.position.set(ROOM_W / 2 - 0.5, 1.05, -0.8);
         scene.add(glow);
 
         showNotification('تم تشغيل المصباح');
-
-        if (state.sculptureOnX) {
-            solvePuzzle5();
-        }
+        if (state.sculptureOnX) solvePuzzle5();
     }
 }
 
@@ -1930,11 +1756,9 @@ function solvePuzzle5() {
     if (state.solvedPuzzles[4]) return;
     state.solvedPuzzles[4] = true;
 
-    // Create a shadow number on the wall
     const shadowCanvas = document.createElement('canvas');
     shadowCanvas.width = 128; shadowCanvas.height = 128;
     const sCtx = shadowCanvas.getContext('2d');
-    sCtx.fillStyle = 'rgba(0,0,0,0)';
     sCtx.clearRect(0, 0, 128, 128);
     sCtx.fillStyle = 'rgba(0,0,0,0.6)';
     sCtx.font = 'bold 80px Arial';
@@ -1946,9 +1770,7 @@ function solvePuzzle5() {
         new THREE.PlaneGeometry(0.4, 0.4),
         new THREE.MeshBasicMaterial({
             map: new THREE.CanvasTexture(shadowCanvas),
-            transparent: true,
-            side: THREE.DoubleSide,
-            depthWrite: false
+            transparent: true, side: THREE.DoubleSide, depthWrite: false
         })
     );
     shadowPlane.position.set(ROOM_W / 2 - 0.01, 1.2, -0.5);
@@ -1960,26 +1782,42 @@ function solvePuzzle5() {
     fillLockDigit(4, PUZZLE_DIGITS[4]);
 }
 
-// ============= PUZZLE 6: Radio =============
+// ============= PUZZLE 6: Radio (Two Dials) =============
 function openRadio() {
     if (state.overlayOpen) return;
     state.overlayOpen = true;
     document.getElementById('radioOverlay').classList.remove('hidden');
     if (isPointerLocked) document.exitPointerLock();
-    document.getElementById('radioSlider').value = 880;
-    document.getElementById('radioDisplay').textContent = 'FM 88.0';
+
+    document.getElementById('radioDialA').value = 50;
+    document.getElementById('radioDialB').value = 50;
+    document.getElementById('radioDisplay').textContent = 'FM --.-';
     document.getElementById('radioMessage').textContent = '';
+    updateRadioDisplay();
 }
 
-function onRadioTune(val) {
-    const freq = (parseInt(val) / 10).toFixed(1);
+function updateRadioDisplay() {
+    const valA = parseInt(document.getElementById('radioDialA').value);
+    const valB = parseInt(document.getElementById('radioDialB').value);
+
+    const diffA = Math.abs(valA - RADIO_TARGET_A);
+    const diffB = Math.abs(valB - RADIO_TARGET_B);
+    const totalDiff = diffA + diffB;
+
+    // Map dial positions to a frequency for display
+    const freq = (88 + (valA + valB) / 10).toFixed(1);
     document.getElementById('radioDisplay').textContent = `FM ${freq}`;
 
-    const diff = Math.abs(parseInt(val) - RADIO_TARGET);
+    // Update dial indicators
+    const indA = document.getElementById('dialIndicatorA');
+    const indB = document.getElementById('dialIndicatorB');
+    if (indA) indA.style.background = diffA <= RADIO_TOLERANCE ? '#0f0' : (diffA <= 15 ? '#ff0' : '#f00');
+    if (indB) indB.style.background = diffB <= RADIO_TOLERANCE ? '#0f0' : (diffB <= 15 ? '#ff0' : '#f00');
+
     const msgEl = document.getElementById('radioMessage');
 
-    if (diff === 0) {
-        msgEl.textContent = `📻 إشارة واضحة!`;
+    if (diffA <= RADIO_TOLERANCE && diffB <= RADIO_TOLERANCE) {
+        msgEl.textContent = 'إشارة واضحة! الدائرتان متوازنتان';
         msgEl.style.color = '#0f0';
         if (!state.solvedPuzzles[5]) {
             state.solvedPuzzles[5] = true;
@@ -1989,30 +1827,26 @@ function onRadioTune(val) {
                 fillLockDigit(5, PUZZLE_DIGITS[5]);
             }, 500);
         }
-    } else if (diff < 20) {
-        msgEl.textContent = '📻 إشارة قريبة...';
+    } else if (totalDiff < 25) {
+        msgEl.textContent = 'إشارة قريبة... وازن الدائرتين';
         msgEl.style.color = '#ff0';
-    } else if (diff < 50) {
-        msgEl.textContent = '📻 تشويش...';
+    } else if (totalDiff < 50) {
+        msgEl.textContent = 'تشويش... حاول ضبط الدائرتين';
         msgEl.style.color = '#f80';
     } else {
-        msgEl.textContent = '📻 لا إشارة';
+        msgEl.textContent = 'لا إشارة';
         msgEl.style.color = '#888';
     }
 }
 
 // ============= LOCK SYSTEM =============
 function fillLockDigit(index, digit) {
-    if (!state.lockActivated) {
-        // Queue it - will be filled when lock activates
-    }
     state.lockDigits[index] = digit;
     updateLockUI();
     playSound(1400, 0.15, 'sine');
 }
 
 function updateLockUI() {
-    // HUD lock display
     for (let i = 0; i < 6; i++) {
         const slot = document.getElementById(`lockSlot${i}`);
         if (slot) {
@@ -2045,7 +1879,6 @@ function openDoorLock() {
     if (state.lockActivated) {
         bodyEl.classList.remove('hidden');
         offEl.classList.add('hidden');
-        // Update door lock digits
         for (let i = 0; i < 6; i++) {
             const slot = document.getElementById(`dlSlot${i}`);
             if (slot) {
@@ -2069,7 +1902,6 @@ function confirmDoorCode() {
         return;
     }
 
-    // All puzzles solved - open door!
     msgEl.textContent = 'الرمز صحيح!';
     msgEl.style.color = '#0f0';
     playSound(600, 0.2, 'sine');
@@ -2087,7 +1919,6 @@ function winGame() {
     state.gameEnded = true;
     clearInterval(state.timerInterval);
 
-    // Animate door opening
     const doorAnim = setInterval(() => {
         doorMesh.rotation.y += 0.05;
         if (doorMesh.rotation.y >= Math.PI / 2) {
@@ -2101,7 +1932,6 @@ function winGame() {
         document.getElementById('winPlayer').textContent = state.playerName;
         document.getElementById('winScreen').classList.remove('hidden');
 
-        // Save result
         fetch('/api/results', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2161,7 +1991,6 @@ function animate() {
 
     const delta = Math.min(clock.getDelta(), 0.1);
 
-    // Movement
     if (state.gameStarted && !state.gameEnded && !state.overlayOpen) {
         velocity.x -= velocity.x * 8.0 * delta;
         velocity.z -= velocity.z * 8.0 * delta;
@@ -2189,7 +2018,6 @@ function animate() {
 
         const newPos = camera.position.clone().add(move);
 
-        // Collision with walls
         const margin = 0.3;
         newPos.x = Math.max(-ROOM_W / 2 + margin, Math.min(ROOM_W / 2 - margin, newPos.x));
         newPos.z = Math.max(-ROOM_D / 2 + margin, Math.min(ROOM_D / 2 - margin, newPos.z));
@@ -2197,7 +2025,7 @@ function animate() {
 
         camera.position.copy(newPos);
 
-        // Raycasting for interaction highlight
+        // Raycasting for interaction
         raycaster.setFromCamera(centerRay, camera);
         const intersects = raycaster.intersectObjects(interactiveObjects, true);
 
@@ -2226,22 +2054,29 @@ function animate() {
             if (isMobile && mobileBtn) mobileBtn.classList.add('hidden');
         }
 
-        // Auto-place sculpture on X mark when holding it and near X (Puzzle 5)
-        if (state.selectedItem === 'مجسم' && !state.sculptureOnX) {
+        // Auto-place sculpture on X mark
+        if (getActiveItemName() === 'مجسم' && !state.sculptureOnX) {
             const xPos = new THREE.Vector3(ROOM_W / 2 - 0.8, PLAYER_HEIGHT, -0.5);
             const dist = camera.position.distanceTo(xPos);
             if (dist < 2.0) {
                 state.sculptureOnX = true;
-                removeFromInventory('مجسم');
-                // Place sculpture on X mark
+                removeHeldItem('مجسم');
                 sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.76, -0.5);
                 sculptureMesh.visible = true;
                 scene.add(sculptureMesh);
                 showNotification('وضعت المجسم على علامة X');
-                if (state.lampOn) {
-                    solvePuzzle5();
-                }
+                if (state.lampOn) solvePuzzle5();
             }
+        }
+
+        // Subtle hand bob when moving
+        if (heldItemGroup && (direction.z !== 0 || direction.x !== 0)) {
+            const bobTime = Date.now() * 0.006;
+            heldItemGroup.position.y = Math.sin(bobTime) * 0.008;
+            heldItemGroup.position.x = Math.cos(bobTime * 0.5) * 0.003;
+        } else if (heldItemGroup) {
+            heldItemGroup.position.y *= 0.9;
+            heldItemGroup.position.x *= 0.9;
         }
     }
 
@@ -2253,8 +2088,8 @@ function animate() {
         }
     }
 
-    // Render phone camera if active
-    renderPhoneCamera();
+    // Update phone camera if active
+    updatePhoneInHand();
 
     renderer.render(scene, camera);
 }
@@ -2272,27 +2107,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (info) {
         info.textContent = isMob
             ? 'التحكم: عصا افتراضية للحركة + سحب للنظر'
-            : 'التحكم: S/Z/Q/D للحركة | الماوس للنظر | نقر للتفاعل';
+            : 'التحكم: W/S للأمام/الخلف | A/D للجانب | الماوس للنظر | سكرول لتبديل الأدوات';
     }
     isMobile = isMob;
 
-    // Handle item placement via keyboard
     document.addEventListener('keydown', (e) => {
-        if (e.code === 'KeyF' && state.selectedItem === 'مجسم' && !state.sculptureOnX) {
+        if (e.code === 'KeyF' && getActiveItemName() === 'مجسم' && !state.sculptureOnX) {
             const xPos = new THREE.Vector3(ROOM_W / 2 - 0.8, PLAYER_HEIGHT, -0.5);
             if (camera.position.distanceTo(xPos) < 2.5) {
                 state.sculptureOnX = true;
-                removeFromInventory('مجسم');
-
-                // Place sculpture on X
+                removeHeldItem('مجسم');
                 sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.77, -0.5);
                 sculptureMesh.visible = true;
-
                 showNotification('تم وضع المجسم على العلامة!');
-
-                if (state.lampOn) {
-                    solvePuzzle5();
-                }
+                if (state.lampOn) solvePuzzle5();
             }
         }
     });
@@ -2301,8 +2129,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Make functions accessible from HTML
 window.startGame = startGame;
 window.closeOverlay = closeOverlay;
-window.closePhoneCamera = closePhoneCamera;
-window.onRadioTune = onRadioTune;
+window.updateRadioDisplay = updateRadioDisplay;
 window.confirmDoorCode = confirmDoorCode;
 window.showAdminTab = showAdminTab;
 window.tryInteract = tryInteract;
