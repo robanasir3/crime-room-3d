@@ -82,28 +82,37 @@
         </div>
     </div>
 
-    <!-- RADIO OVERLAY (Puzzle 6 – Two Dials) -->
+    <!-- RADIO OVERLAY (Puzzle 6 – 3 Wave Generators) -->
     <div id="radioOverlay" class="overlay hidden">
         <div class="overlay-content radio-panel">
-            <button class="close-btn" onclick="closeOverlay('radioOverlay')">✕</button>
+            <button class="close-btn" onclick="closeRadioOverlay()">✕</button>
             <h2>📻 الراديو</h2>
             <div class="radio-body">
                 <div class="radio-display" id="radioDisplay">FM --.-</div>
-                <div class="radio-dials-container">
-                    <div class="radio-dial-group">
-                        <label>الدائرة A</label>
-                        <div class="dial-wrapper">
-                            <input type="range" id="radioDialA" class="radio-dial-knob" min="0" max="100" value="50"
-                                   oninput="updateRadioDisplay()">
-                            <div class="dial-indicator" id="dialIndicatorA"></div>
+                <canvas id="radioWaveVis" class="radio-wave-canvas" width="360" height="100"></canvas>
+                <div class="radio-waves-container">
+                    <div class="radio-wave-group">
+                        <label>الموجة A <span class="wave-label-sub">القاعدة</span></label>
+                        <div class="wave-ctrl">
+                            <input type="range" id="radioWaveA" class="radio-wave-knob wave-a" min="0" max="100" value="50"
+                                   oninput="updateRadioWaves()">
+                            <div class="wave-indicator" id="waveIndA"></div>
                         </div>
                     </div>
-                    <div class="radio-dial-group">
-                        <label>الدائرة B</label>
-                        <div class="dial-wrapper">
-                            <input type="range" id="radioDialB" class="radio-dial-knob" min="0" max="100" value="50"
-                                   oninput="updateRadioDisplay()">
-                            <div class="dial-indicator" id="dialIndicatorB"></div>
+                    <div class="radio-wave-group">
+                        <label>الموجة B <span class="wave-label-sub">الدقيق</span></label>
+                        <div class="wave-ctrl">
+                            <input type="range" id="radioWaveB" class="radio-wave-knob wave-b" min="0" max="100" value="50"
+                                   oninput="updateRadioWaves()">
+                            <div class="wave-indicator" id="waveIndB"></div>
+                        </div>
+                    </div>
+                    <div class="radio-wave-group">
+                        <label>الموجة C <span class="wave-label-sub">التوازن</span></label>
+                        <div class="wave-ctrl">
+                            <input type="range" id="radioWaveC" class="radio-wave-knob wave-c" min="0" max="100" value="50"
+                                   oninput="updateRadioWaves()">
+                            <div class="wave-indicator" id="waveIndC"></div>
                         </div>
                     </div>
                 </div>

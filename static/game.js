@@ -8,9 +8,11 @@ const PUZZLE_DIGITS = ['7', '3', '7', '1', '4', '8'];
 const ROOM_W = 10, ROOM_H = 3.5, ROOM_D = 8;
 const PLAYER_HEIGHT = 1.6;
 const MOVE_SPEED = 7.0;
-const RADIO_TARGET_A = 52;  // dial A target (0-100)
-const RADIO_TARGET_B = 73;  // dial B target (0-100)
-const RADIO_TOLERANCE = 5;
+const RADIO_TARGET_FREQ = 1045; // FM 104.5
+// Radio wave system: 3 independent wave generators must be combined to reach target
+const RADIO_WAVE_A_DEFAULT = 0;
+const RADIO_WAVE_B_DEFAULT = 0;
+const RADIO_WAVE_C_DEFAULT = 0;
 
 // ============= GAME STATE =============
 const state = {
@@ -251,20 +253,35 @@ function setupHeldItemSystem() {
     camera.add(heldItemGroup);
     scene.add(camera);
 
-    // Create a simple hand/arm mesh
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a574, roughness: 0.6, metalness: 0.05 });
-    // Forearm
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.06), skinMat);
-    arm.position.set(0.35, -0.45, -0.4);
-    arm.rotation.x = -0.3;
-    arm.rotation.z = 0.1;
-    heldItemGroup.add(arm);
-    // Hand
-    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.08), skinMat);
-    hand.position.set(0.35, -0.32, -0.52);
-    hand.rotation.x = -0.5;
-    heldItemGroup.add(hand);
-    handMesh = hand;
+    // Load real FPS arms model (MIT license, by GDQuest)
+    gltfLoader.load('/static/models/fps_arms/fps_arms.glb', (gltf) => {
+        handMesh = gltf.scene;
+        handMesh.scale.setScalar(0.18);
+        handMesh.position.set(0.25, -0.38, -0.35);
+        handMesh.rotation.set(-0.2, -0.3, 0.1);
+        handMesh.traverse(child => {
+            if (child.isMesh) {
+                child.castShadow = false;
+                child.receiveShadow = false;
+                child.renderOrder = 999;
+            }
+        });
+        heldItemGroup.add(handMesh);
+    }, undefined, (err) => {
+        console.warn('FPS arms model load failed, using fallback:', err);
+        // Fallback: simple procedural hand
+        const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a574, roughness: 0.6, metalness: 0.05 });
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.06), skinMat);
+        arm.position.set(0.35, -0.45, -0.4);
+        arm.rotation.x = -0.3;
+        arm.rotation.z = 0.1;
+        heldItemGroup.add(arm);
+        const hand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.08), skinMat);
+        hand.position.set(0.35, -0.32, -0.52);
+        hand.rotation.x = -0.5;
+        heldItemGroup.add(hand);
+        handMesh = hand;
+    });
 }
 
 function getActiveItem() {
@@ -834,7 +851,7 @@ function buildPuzzleObjects() {
         new THREE.PlaneGeometry(0.2, 0.28),
         new THREE.MeshStandardMaterial({ color: 0xf5f0e0, roughness: 0.9, side: THREE.DoubleSide })
     );
-    paperMesh.position.set(-2.5, 0.82, -1);
+    paperMesh.position.set(-2.5, 0.78, -1);
     paperMesh.rotation.x = -Math.PI / 2;
     paperMesh.userData = { type: 'paper', promptText: 'ورقة بيضاء', pickable: true, invName: 'ورقة' };
     paperMesh.castShadow = true;
@@ -862,7 +879,7 @@ function buildPuzzleObjects() {
     phoneCam.position.set(-0.02, 0.005, -0.06);
     phoneCam.rotation.x = Math.PI / 2;
     phoneGroup.add(phoneCam);
-    phoneGroup.position.set(3.3, 0.87, 1.5);
+    phoneGroup.position.set(3.3, 0.82, 1.5);
     phoneGroup.castShadow = true;
     scene.add(phoneGroup);
     phoneMesh = phoneGroup;
@@ -941,14 +958,14 @@ function buildPuzzleObjects() {
     cmSide.position.set(0.126, 0.16, 0);
     cmSide.rotation.y = Math.PI / 2;
     cmGroup.add(cmSide);
-    cmGroup.position.set(-3.5, 0.80, -3);
+    cmGroup.position.set(-3.5, 0.72, -3);
     cmGroup.castShadow = true;
     scene.add(cmGroup);
     coffeeMachineMesh = cmGroup;
     coffeeMachineMesh.userData = { type: 'coffeeMachine', promptText: 'آلة صنع قهوة' };
     interactiveObjects.push(coffeeMachineMesh);
 
-    cupMesh = createCup(-3.2, 0.80, -3);
+    cupMesh = createCup(-3.2, 0.72, -3);
     cupMesh.userData = { type: 'cup', promptText: 'كوب أسود', pickable: true, invName: 'كوب' };
     interactiveObjects.push(cupMesh);
 
@@ -957,7 +974,7 @@ function buildPuzzleObjects() {
         new THREE.PlaneGeometry(0.15, 0.15),
         new THREE.MeshStandardMaterial({ color: 0xff0000, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
     );
-    xMarkMesh.position.set(ROOM_W / 2 - 0.8, 0.76, -0.5);
+    xMarkMesh.position.set(ROOM_W / 2 - 0.8, 0.74, -0.5);
     xMarkMesh.rotation.x = -Math.PI / 2;
     scene.add(xMarkMesh);
 
@@ -972,12 +989,12 @@ function buildPuzzleObjects() {
     xMarkMesh.material.color = new THREE.Color(0xffffff);
     xMarkMesh.material.needsUpdate = true;
 
-    sculptureMesh = createSculpture(ROOM_W / 2 - 1.5, 0.76, 0.5);
+    sculptureMesh = createSculpture(ROOM_W / 2 - 1.5, 0.72, 0.5);
     sculptureMesh.userData = { type: 'sculpture', promptText: 'مجسم معدني', pickable: true, invName: 'مجسم' };
     interactiveObjects.push(sculptureMesh);
 
     loadModel('desk_lamp_arm_01/desk_lamp_arm_01.gltf',
-        { x: ROOM_W / 2 - 0.5, y: 0.75, z: -0.8 }, 0.35, { y: Math.PI }, (model) => {
+        { x: ROOM_W / 2 - 0.5, y: 0.73, z: -0.8 }, 0.35, { y: Math.PI }, (model) => {
             if (model) {
                 deskLampMesh = model;
                 deskLampMesh.userData = { type: 'deskLamp', promptText: 'مصباح مكتب' };
@@ -996,7 +1013,7 @@ function buildPuzzleObjects() {
 
     // === Puzzle 6: Radio ===
     loadModel('vintage_radio_transceiver/vintage_radio_transceiver.gltf',
-        { x: 3, y: 0.75, z: 3 }, 2.0, { y: 0 }, (model) => {
+        { x: 3, y: 0.71, z: 3 }, 2.0, { y: 0 }, (model) => {
             if (model) {
                 radioMesh = model;
                 radioMesh.userData = { type: 'radio', promptText: 'راديو كلاسيكي' };
@@ -1007,7 +1024,7 @@ function buildPuzzleObjects() {
         new THREE.BoxGeometry(0.3, 0.2, 0.15),
         new THREE.MeshStandardMaterial({ visible: false })
     );
-    radioHitbox.position.set(3, 0.85, 3);
+    radioHitbox.position.set(3, 0.81, 3);
     radioHitbox.userData = { type: 'radio', promptText: 'راديو كلاسيكي' };
     scene.add(radioHitbox);
     interactiveObjects.push(radioHitbox);
@@ -1782,42 +1799,84 @@ function solvePuzzle5() {
     fillLockDigit(4, PUZZLE_DIGITS[4]);
 }
 
-// ============= PUZZLE 6: Radio (Two Dials) =============
+// ============= PUZZLE 6: Radio (3 Wave Buttons) =============
+// The player must combine 3 wave frequencies to reach FM 104.5 (value 1045)
+// Each wave has a knob (0-100) that adds a specific contribution
+// Wave A: base frequency (880-960), Wave B: fine tune (+0 to +100), Wave C: micro adjust (+0 to +20 or -20)
+// The trick: they must figure out the right combination of all 3 to land on exactly 1045
+
+let radioWaveValues = [50, 50, 50];
+let radioWaveCanvas = null;
+let radioAnimFrame = null;
+
 function openRadio() {
     if (state.overlayOpen) return;
     state.overlayOpen = true;
     document.getElementById('radioOverlay').classList.remove('hidden');
     if (isPointerLocked) document.exitPointerLock();
 
-    document.getElementById('radioDialA').value = 50;
-    document.getElementById('radioDialB').value = 50;
+    radioWaveValues = [50, 50, 50];
+    document.getElementById('radioWaveA').value = 50;
+    document.getElementById('radioWaveB').value = 50;
+    document.getElementById('radioWaveC').value = 50;
     document.getElementById('radioDisplay').textContent = 'FM --.-';
     document.getElementById('radioMessage').textContent = '';
-    updateRadioDisplay();
+
+    radioWaveCanvas = document.getElementById('radioWaveVis');
+    updateRadioWaves();
+    startRadioAnimation();
 }
 
-function updateRadioDisplay() {
-    const valA = parseInt(document.getElementById('radioDialA').value);
-    const valB = parseInt(document.getElementById('radioDialB').value);
+function closeRadioOverlay() {
+    if (radioAnimFrame) cancelAnimationFrame(radioAnimFrame);
+    radioAnimFrame = null;
+    closeOverlay('radioOverlay');
+}
 
-    const diffA = Math.abs(valA - RADIO_TARGET_A);
-    const diffB = Math.abs(valB - RADIO_TARGET_B);
-    const totalDiff = diffA + diffB;
+function updateRadioWaves() {
+    const a = parseInt(document.getElementById('radioWaveA').value);
+    const b = parseInt(document.getElementById('radioWaveB').value);
+    const c = parseInt(document.getElementById('radioWaveC').value);
+    radioWaveValues = [a, b, c];
 
-    // Map dial positions to a frequency for display
-    const freq = (88 + (valA + valB) / 10).toFixed(1);
-    document.getElementById('radioDisplay').textContent = `FM ${freq}`;
+    // Calculate combined frequency:
+    // Wave A contributes the base (880 + a * 0.8 = 880-960)
+    // Wave B contributes mid-range (0 + b * 1.0 = 0-100)
+    // Wave C contributes fine adjustment (-15 + c * 0.3 = -15 to +15)
+    const freqRaw = 880 + (a * 0.8) + (b * 1.0) + (-15 + c * 0.3);
+    const freqVal = Math.round(freqRaw);
+    const freqDisplay = (freqVal / 10).toFixed(1);
 
-    // Update dial indicators
-    const indA = document.getElementById('dialIndicatorA');
-    const indB = document.getElementById('dialIndicatorB');
-    if (indA) indA.style.background = diffA <= RADIO_TOLERANCE ? '#0f0' : (diffA <= 15 ? '#ff0' : '#f00');
-    if (indB) indB.style.background = diffB <= RADIO_TOLERANCE ? '#0f0' : (diffB <= 15 ? '#ff0' : '#f00');
+    document.getElementById('radioDisplay').textContent = `FM ${freqDisplay}`;
+
+    // Strength indicators
+    const diff = Math.abs(freqVal - RADIO_TARGET_FREQ);
+    const indA = document.getElementById('waveIndA');
+    const indB = document.getElementById('waveIndB');
+    const indC = document.getElementById('waveIndC');
+
+    // Each wave has its own "sweet spot" indicator
+    // Wave A: needs to be around 81 (880 + 81*0.8 = 944.8 base)
+    // Wave B: needs to be around 85 (+ 85)
+    // Wave C: needs to be around 72 (-15 + 72*0.3 = 6.6, total ~1036... need to recalc)
+    // Target: 1045 = 880 + A*0.8 + B*1.0 + (-15 + C*0.3)
+    // 1045 = 865 + A*0.8 + B + C*0.3
+    // 180 = A*0.8 + B + C*0.3
+    // One solution: A=75 (60), B=100 (100), C=67 (20.1) → 60+100+20.1=180.1 ≈ close
+    // Better: A=100 (80), B=85 (85), C=50 (15) → 80+85+15=180 exact!
+    // So sweet spots: A=100, B=85, C=50
+
+    const diffA = Math.abs(a - 100);
+    const diffB = Math.abs(b - 85);
+    const diffC = Math.abs(c - 50);
+    if (indA) indA.style.background = diffA <= 3 ? '#0f0' : (diffA <= 15 ? '#ff0' : '#f00');
+    if (indB) indB.style.background = diffB <= 3 ? '#0f0' : (diffB <= 15 ? '#ff0' : '#f00');
+    if (indC) indC.style.background = diffC <= 3 ? '#0f0' : (diffC <= 15 ? '#ff0' : '#f00');
 
     const msgEl = document.getElementById('radioMessage');
 
-    if (diffA <= RADIO_TOLERANCE && diffB <= RADIO_TOLERANCE) {
-        msgEl.textContent = 'إشارة واضحة! الدائرتان متوازنتان';
+    if (diff <= 1) {
+        msgEl.textContent = '📻 إشارة واضحة! الموجات متوازنة تماماً';
         msgEl.style.color = '#0f0';
         if (!state.solvedPuzzles[5]) {
             state.solvedPuzzles[5] = true;
@@ -1827,16 +1886,86 @@ function updateRadioDisplay() {
                 fillLockDigit(5, PUZZLE_DIGITS[5]);
             }, 500);
         }
-    } else if (totalDiff < 25) {
-        msgEl.textContent = 'إشارة قريبة... وازن الدائرتين';
+    } else if (diff <= 5) {
+        msgEl.textContent = 'إشارة قوية جداً... اضبط بدقة!';
+        msgEl.style.color = '#0f0';
+    } else if (diff <= 15) {
+        msgEl.textContent = 'إشارة قريبة... استمر في الضبط';
         msgEl.style.color = '#ff0';
-    } else if (totalDiff < 50) {
-        msgEl.textContent = 'تشويش... حاول ضبط الدائرتين';
+    } else if (diff <= 40) {
+        msgEl.textContent = 'تشويش خفيف...';
         msgEl.style.color = '#f80';
     } else {
-        msgEl.textContent = 'لا إشارة';
+        msgEl.textContent = 'تشويش شديد';
         msgEl.style.color = '#888';
     }
+}
+
+function startRadioAnimation() {
+    if (!radioWaveCanvas) return;
+    const ctx = radioWaveCanvas.getContext('2d');
+    const w = radioWaveCanvas.width;
+    const h = radioWaveCanvas.height;
+
+    function drawWaves() {
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(0, 0, w, h);
+
+        const t = Date.now() * 0.002;
+        const colors = ['#ff4444', '#44ff44', '#4488ff'];
+        const [a, b, c] = radioWaveValues;
+
+        // Draw 3 sine waves overlapping
+        for (let wi = 0; wi < 3; wi++) {
+            const val = [a, b, c][wi];
+            const freq = 0.02 + val * 0.0005;
+            const amp = 10 + val * 0.2;
+            const phase = t * (1 + wi * 0.7);
+
+            ctx.strokeStyle = colors[wi];
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath();
+            for (let x = 0; x < w; x++) {
+                const y = h / 2 + Math.sin(x * freq + phase) * amp + Math.sin(x * freq * 2.1 + phase * 1.3) * (amp * 0.3);
+                if (x === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        // Combined wave (white)
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+            let y = h / 2;
+            for (let wi = 0; wi < 3; wi++) {
+                const val = [a, b, c][wi];
+                const freq = 0.02 + val * 0.0005;
+                const amp = 6 + val * 0.12;
+                const phase = t * (1 + wi * 0.7);
+                y += Math.sin(x * freq + phase) * amp * 0.33;
+            }
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // Grid lines
+        ctx.strokeStyle = 'rgba(0,255,255,0.1)';
+        ctx.lineWidth = 0.5;
+        for (let y = 0; y < h; y += 15) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+        }
+
+        if (state.overlayOpen) {
+            radioAnimFrame = requestAnimationFrame(drawWaves);
+        }
+    }
+    drawWaves();
 }
 
 // ============= LOCK SYSTEM =============
@@ -2054,20 +2183,8 @@ function animate() {
             if (isMobile && mobileBtn) mobileBtn.classList.add('hidden');
         }
 
-        // Auto-place sculpture on X mark
-        if (getActiveItemName() === 'مجسم' && !state.sculptureOnX) {
-            const xPos = new THREE.Vector3(ROOM_W / 2 - 0.8, PLAYER_HEIGHT, -0.5);
-            const dist = camera.position.distanceTo(xPos);
-            if (dist < 2.0) {
-                state.sculptureOnX = true;
-                removeHeldItem('مجسم');
-                sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.76, -0.5);
-                sculptureMesh.visible = true;
-                scene.add(sculptureMesh);
-                showNotification('وضعت المجسم على علامة X');
-                if (state.lampOn) solvePuzzle5();
-            }
-        }
+        // Player presses F near X mark to place any held item (only sculpture triggers puzzle)
+        // (handled in DOMContentLoaded keydown listener below)
 
         // Subtle hand bob when moving
         if (heldItemGroup && (direction.z !== 0 || direction.x !== 0)) {
@@ -2112,15 +2229,23 @@ document.addEventListener('DOMContentLoaded', () => {
     isMobile = isMob;
 
     document.addEventListener('keydown', (e) => {
-        if (e.code === 'KeyF' && getActiveItemName() === 'مجسم' && !state.sculptureOnX) {
+        if (e.code === 'KeyF') {
+            const activeItem = getActiveItemName();
+            if (!activeItem) return;
             const xPos = new THREE.Vector3(ROOM_W / 2 - 0.8, PLAYER_HEIGHT, -0.5);
             if (camera.position.distanceTo(xPos) < 2.5) {
-                state.sculptureOnX = true;
-                removeHeldItem('مجسم');
-                sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.77, -0.5);
-                sculptureMesh.visible = true;
-                showNotification('تم وضع المجسم على العلامة!');
-                if (state.lampOn) solvePuzzle5();
+                // Any item can be placed on the X mark
+                removeHeldItem(activeItem);
+                if (activeItem === 'مجسم') {
+                    state.sculptureOnX = true;
+                    sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.74, -0.5);
+                    sculptureMesh.visible = true;
+                    scene.add(sculptureMesh);
+                    showNotification('تم وضع المجسم على العلامة!');
+                    if (state.lampOn) solvePuzzle5();
+                } else {
+                    showNotification(`وضعت ${activeItem} على العلامة... لكن لا شيء يحدث`);
+                }
             }
         }
     });
@@ -2129,7 +2254,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // Make functions accessible from HTML
 window.startGame = startGame;
 window.closeOverlay = closeOverlay;
-window.updateRadioDisplay = updateRadioDisplay;
+window.updateRadioWaves = updateRadioWaves;
+window.closeRadioOverlay = closeRadioOverlay;
 window.confirmDoorCode = confirmDoorCode;
 window.showAdminTab = showAdminTab;
 window.tryInteract = tryInteract;
