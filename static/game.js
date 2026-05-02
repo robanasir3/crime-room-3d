@@ -254,33 +254,53 @@ function setupHeldItemSystem() {
     scene.add(camera);
 
     // Load real FPS arms model (MIT license, by GDQuest)
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xc4956a, roughness: 0.5, metalness: 0.05, depthTest: false });
     gltfLoader.load('/static/models/fps_arms/fps_arms.glb', (gltf) => {
         handMesh = gltf.scene;
-        handMesh.scale.setScalar(0.18);
-        handMesh.position.set(0.25, -0.38, -0.35);
-        handMesh.rotation.set(-0.2, -0.3, 0.1);
+        handMesh.scale.setScalar(1.5);
+        handMesh.position.set(0.25, -0.2, -0.45);
+        handMesh.rotation.set(0.3, Math.PI - 0.3, 0.15);
         handMesh.traverse(child => {
             if (child.isMesh) {
                 child.castShadow = false;
                 child.receiveShadow = false;
                 child.renderOrder = 999;
+                child.material = skinMat;
+                child.frustumCulled = false;
+                child.material.depthTest = false;
             }
         });
         heldItemGroup.add(handMesh);
     }, undefined, (err) => {
         console.warn('FPS arms model load failed, using fallback:', err);
-        // Fallback: simple procedural hand
-        const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a574, roughness: 0.6, metalness: 0.05 });
-        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.06), skinMat);
-        arm.position.set(0.35, -0.45, -0.4);
-        arm.rotation.x = -0.3;
-        arm.rotation.z = 0.1;
-        heldItemGroup.add(arm);
-        const hand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.08), skinMat);
-        hand.position.set(0.35, -0.32, -0.52);
-        hand.rotation.x = -0.5;
-        heldItemGroup.add(hand);
-        handMesh = hand;
+        const fbSkinMat = new THREE.MeshStandardMaterial({ color: 0xc4956a, roughness: 0.5, metalness: 0.05, depthTest: false });
+        const armGroup = new THREE.Group();
+        // Forearm
+        const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.3, 8), fbSkinMat);
+        forearm.position.set(0, -0.1, 0);
+        forearm.rotation.x = -0.4;
+        armGroup.add(forearm);
+        // Palm
+        const palm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.02, 0.1), fbSkinMat);
+        palm.position.set(0, 0.05, -0.08);
+        palm.rotation.x = -0.6;
+        armGroup.add(palm);
+        // Fingers
+        for (let i = 0; i < 4; i++) {
+            const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.007, 0.07, 6), fbSkinMat);
+            finger.position.set(-0.025 + i * 0.017, 0.08, -0.15);
+            finger.rotation.x = -0.7;
+            armGroup.add(finger);
+        }
+        // Thumb
+        const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.009, 0.05, 6), fbSkinMat);
+        thumb.position.set(-0.045, 0.03, -0.1);
+        thumb.rotation.set(-0.4, 0, 0.5);
+        armGroup.add(thumb);
+        armGroup.position.set(0.3, -0.4, -0.45);
+        armGroup.traverse(c => { if (c.isMesh) { c.renderOrder = 999; c.frustumCulled = false; }});
+        heldItemGroup.add(armGroup);
+        handMesh = armGroup;
     });
 }
 
@@ -432,6 +452,13 @@ function showItemInHand(itemName) {
         }
     }
 
+    group.traverse(child => {
+        if (child.isMesh) {
+            child.renderOrder = 999;
+            child.frustumCulled = false;
+            if (child.material) child.material.depthTest = false;
+        }
+    });
     heldItemGroup.add(group);
     heldItemMesh = group;
 }
@@ -970,24 +997,25 @@ function buildPuzzleObjects() {
     interactiveObjects.push(cupMesh);
 
     // === Puzzle 5: Metal sculpture, desk lamp, X mark ===
+    const xCanvas = document.createElement('canvas');
+    xCanvas.width = 128; xCanvas.height = 128;
+    const xCtx = xCanvas.getContext('2d');
+    xCtx.fillStyle = 'rgba(0,0,0,0)';
+    xCtx.clearRect(0, 0, 128, 128);
+    xCtx.strokeStyle = '#ff0000';
+    xCtx.lineWidth = 10;
+    xCtx.shadowColor = '#ff0000';
+    xCtx.shadowBlur = 8;
+    xCtx.beginPath(); xCtx.moveTo(15, 15); xCtx.lineTo(113, 113); xCtx.stroke();
+    xCtx.beginPath(); xCtx.moveTo(113, 15); xCtx.lineTo(15, 113); xCtx.stroke();
+    const xTex = new THREE.CanvasTexture(xCanvas);
     xMarkMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.15, 0.15),
-        new THREE.MeshStandardMaterial({ color: 0xff0000, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+        new THREE.PlaneGeometry(0.25, 0.25),
+        new THREE.MeshBasicMaterial({ map: xTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
     );
-    xMarkMesh.position.set(ROOM_W / 2 - 0.8, 0.74, -0.5);
+    xMarkMesh.position.set(ROOM_W / 2 - 0.8, 0.755, -0.5);
     xMarkMesh.rotation.x = -Math.PI / 2;
     scene.add(xMarkMesh);
-
-    const xCanvas = document.createElement('canvas');
-    xCanvas.width = 64; xCanvas.height = 64;
-    const xCtx = xCanvas.getContext('2d');
-    xCtx.strokeStyle = '#ff0000';
-    xCtx.lineWidth = 4;
-    xCtx.beginPath(); xCtx.moveTo(10, 10); xCtx.lineTo(54, 54); xCtx.stroke();
-    xCtx.beginPath(); xCtx.moveTo(54, 10); xCtx.lineTo(10, 54); xCtx.stroke();
-    xMarkMesh.material.map = new THREE.CanvasTexture(xCanvas);
-    xMarkMesh.material.color = new THREE.Color(0xffffff);
-    xMarkMesh.material.needsUpdate = true;
 
     sculptureMesh = createSculpture(ROOM_W / 2 - 1.5, 0.72, 0.5);
     sculptureMesh.userData = { type: 'sculpture', promptText: 'مجسم معدني', pickable: true, invName: 'مجسم' };
@@ -1849,34 +1877,11 @@ function updateRadioWaves() {
 
     document.getElementById('radioDisplay').textContent = `FM ${freqDisplay}`;
 
-    // Strength indicators
     const diff = Math.abs(freqVal - RADIO_TARGET_FREQ);
-    const indA = document.getElementById('waveIndA');
-    const indB = document.getElementById('waveIndB');
-    const indC = document.getElementById('waveIndC');
-
-    // Each wave has its own "sweet spot" indicator
-    // Wave A: needs to be around 81 (880 + 81*0.8 = 944.8 base)
-    // Wave B: needs to be around 85 (+ 85)
-    // Wave C: needs to be around 72 (-15 + 72*0.3 = 6.6, total ~1036... need to recalc)
-    // Target: 1045 = 880 + A*0.8 + B*1.0 + (-15 + C*0.3)
-    // 1045 = 865 + A*0.8 + B + C*0.3
-    // 180 = A*0.8 + B + C*0.3
-    // One solution: A=75 (60), B=100 (100), C=67 (20.1) → 60+100+20.1=180.1 ≈ close
-    // Better: A=100 (80), B=85 (85), C=50 (15) → 80+85+15=180 exact!
-    // So sweet spots: A=100, B=85, C=50
-
-    const diffA = Math.abs(a - 100);
-    const diffB = Math.abs(b - 85);
-    const diffC = Math.abs(c - 50);
-    if (indA) indA.style.background = diffA <= 3 ? '#0f0' : (diffA <= 15 ? '#ff0' : '#f00');
-    if (indB) indB.style.background = diffB <= 3 ? '#0f0' : (diffB <= 15 ? '#ff0' : '#f00');
-    if (indC) indC.style.background = diffC <= 3 ? '#0f0' : (diffC <= 15 ? '#ff0' : '#f00');
-
     const msgEl = document.getElementById('radioMessage');
 
     if (diff <= 1) {
-        msgEl.textContent = '📻 إشارة واضحة! الموجات متوازنة تماماً';
+        msgEl.textContent = '📻 إشارة واضحة!';
         msgEl.style.color = '#0f0';
         if (!state.solvedPuzzles[5]) {
             state.solvedPuzzles[5] = true;
@@ -1886,17 +1891,8 @@ function updateRadioWaves() {
                 fillLockDigit(5, PUZZLE_DIGITS[5]);
             }, 500);
         }
-    } else if (diff <= 5) {
-        msgEl.textContent = 'إشارة قوية جداً... اضبط بدقة!';
-        msgEl.style.color = '#0f0';
-    } else if (diff <= 15) {
-        msgEl.textContent = 'إشارة قريبة... استمر في الضبط';
-        msgEl.style.color = '#ff0';
-    } else if (diff <= 40) {
-        msgEl.textContent = 'تشويش خفيف...';
-        msgEl.style.color = '#f80';
     } else {
-        msgEl.textContent = 'تشويش شديد';
+        msgEl.textContent = 'تشويش...';
         msgEl.style.color = '#888';
     }
 }
@@ -2183,8 +2179,14 @@ function animate() {
             if (isMobile && mobileBtn) mobileBtn.classList.add('hidden');
         }
 
-        // Player presses F near X mark to place any held item (only sculpture triggers puzzle)
-        // (handled in DOMContentLoaded keydown listener below)
+        // Show prompt when near X mark with item in hand
+        if (getActiveItemName()) {
+            const xPos = new THREE.Vector3(ROOM_W / 2 - 0.8, PLAYER_HEIGHT, -0.5);
+            if (camera.position.distanceTo(xPos) < 2.5 && !foundInteractive) {
+                promptText.textContent = 'اضغط F لوضع الغرض على العلامة';
+                promptEl.classList.remove('hidden');
+            }
+        }
 
         // Subtle hand bob when moving
         if (heldItemGroup && (direction.z !== 0 || direction.x !== 0)) {
@@ -2238,7 +2240,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 removeHeldItem(activeItem);
                 if (activeItem === 'مجسم') {
                     state.sculptureOnX = true;
-                    sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.74, -0.5);
+                    sculptureMesh.position.set(ROOM_W / 2 - 0.8, 0.755, -0.5);
                     sculptureMesh.visible = true;
                     scene.add(sculptureMesh);
                     showNotification('تم وضع المجسم على العلامة!');
